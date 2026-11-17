@@ -41,7 +41,8 @@ test("two charges cannot pass the same ceiling and an estimate does not consume 
       mission_id text,
       amount_cents integer not null,
       voided_at timestamptz,
-      department_slug text not null default ''
+      department_slug text not null default '',
+      direction text not null default 'expenditure'
     );
     create table commitments (
       id text primary key,
@@ -71,11 +72,14 @@ test("two charges cannot pass the same ceiling and an estimate does not consume 
     },
   });
   await charge(80);
+  await db.exec("insert into payments (id, organization_id, amount_cents, direction) values ('pay_receipt', 'org_a', 5000, 'receipt')");
   await assert.rejects(charge(30), CompanyError);
   await charge(50, "estimate");
   await charge(20);
   await assert.rejects(charge(1), CompanyError);
-  const rows = await db.query<{ total: number }>("select coalesce(sum(amount_cents), 0)::int as total from payments");
+  const rows = await db.query<{ total: number }>("select coalesce(sum(amount_cents), 0)::int as total from payments where direction = 'expenditure'");
   assert.equal(rows.rows[0]?.total, 100);
+  const receipts = await db.query<{ total: number }>("select coalesce(sum(amount_cents), 0)::int as total from payments where direction = 'receipt'");
+  assert.equal(receipts.rows[0]?.total, 5000);
   await db.close();
 });

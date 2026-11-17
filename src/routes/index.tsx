@@ -325,12 +325,12 @@ function Command() {
         <section className="mt-10">
           <h2 className="text-sm font-medium">Financial control</h2>
           <p className="mt-2 text-sm text-muted">
-            Recorded {formatMoney(data.finance.spentCents)}. Reserved {formatMoney(data.finance.reservedCents)}. Estimates {formatMoney(data.finance.estimateCents)}, which do not consume the ceiling.
+            Received {formatMoney(data.finance.receivedCents)}. Spent {formatMoney(data.finance.spentCents)}. Reserved {formatMoney(data.finance.reservedCents)}. Estimates {formatMoney(data.finance.estimateCents)} do not consume the ceiling. Receipts do not either.
           </p>
           <p className="mt-2 text-sm text-muted">
             {data.finance.ceilingCents == null
               ? "No spending ceiling is set. Remaining budget is unavailable, not zero and not unlimited as a measured figure."
-              : `Ceiling ${formatMoney(data.finance.ceilingCents)}. Remaining ${formatMoney(data.finance.remainingCents ?? 0)}. Utilization ${Math.round((data.finance.utilization ?? 0) * 100)}%, from recorded charges and open reservations.`}
+              : `Ceiling ${formatMoney(data.finance.ceilingCents)}. Remaining ${formatMoney(data.finance.remainingCents ?? 0)}. Utilization ${Math.round((data.finance.utilization ?? 0) * 100)}%, from expenditures and open reservations.`}
           </p>
         </section>
         <section className="mt-10">
@@ -437,7 +437,7 @@ function Command() {
             </ul>
           </section>
         ) : null}
-        <PayCard recordedCents={data.counts.recordedCents} />
+        <PayCard recordedCents={data.counts.recordedCents} recordedLabel="Received" />
         {data.recent.length > 0 ? (
           <section>
             <h2 className="text-sm font-medium">Latest record</h2>

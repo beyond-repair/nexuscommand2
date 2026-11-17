@@ -634,7 +634,7 @@ function MissionLedger({
   onChange,
 }: {
   missionId: string;
-  rows: Array<{ id: string; payer: string; amountCents: number; note: string; voidedAt: string | null; createdAt: string }>;
+  rows: Array<{ id: string; payer: string; amountCents: number; note: string; voidedAt: string | null; createdAt: string; direction?: string }>;
   poster: boolean;
   onChange: () => void;
 }) {
@@ -645,7 +645,7 @@ function MissionLedger({
   const [voiding, setVoiding] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const cents = dollarsToCents(amount);
-  const active = rows.filter((row) => !row.voidedAt);
+  const active = rows.filter((row) => !row.voidedAt && row.direction !== "expenditure");
   const total = active.reduce((sum, row) => sum + row.amountCents, 0);
 
   async function record(event: FormEvent) {
@@ -687,7 +687,7 @@ function MissionLedger({
     <section className="mt-8 max-w-xl">
       <PayCard poster={poster} recordedCents={total} recordedLabel="On this mission" />
       <form onSubmit={(event) => void record(event)} className="mt-4 space-y-2">
-        <p className="text-sm text-muted">Record money that already arrived for this mission. NEXUS does not collect it.</p>
+        <p className="text-sm text-muted">Record money that already arrived for this mission. A receipt does not consume the spending ceiling. NEXUS does not collect it.</p>
         <input value={payer} onChange={(event) => setPayer(event.target.value)} placeholder="Who paid" className={`${controlClass} h-11`} />
         <input value={amount} onChange={(event) => setAmount(event.target.value)} inputMode="decimal" placeholder="Amount, 25.00" className={`${controlClass} h-11`} />
         <input value={payNote} onChange={(event) => setPayNote(event.target.value)} placeholder="Note" className={`${controlClass} h-11`} />

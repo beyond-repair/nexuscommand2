@@ -73,6 +73,22 @@ import {
   type PriceCard,
   type UnknownCostPolicy,
 } from "./world.ts";
+import {
+  addContact,
+  archiveParty,
+  assignRole,
+  createOffer,
+  createParty,
+  deactivateRole,
+  editOffer,
+  editParty,
+  listOffers,
+  listParties,
+  reactivateRole,
+  retireOffer,
+  type OfferRecord,
+  type PartyRecord,
+} from "./books.ts";
 
 export interface Sql {
   <T = Record<string, unknown>>(strings: TemplateStringsArray, ...values: unknown[]): Promise<T[]>;
@@ -148,6 +164,7 @@ export type CommandCenter = {
   finance: {
     ceilingCents: number | null;
     spentCents: number;
+    receivedCents: number;
     reservedCents: number;
     estimateCents: number;
     remainingCents: number | null;
@@ -357,6 +374,7 @@ export type PaymentRow = {
   missionId: string | null;
   missionTitle: string | null;
   createdAt: string;
+  direction: "receipt" | "expenditure";
 };
 
 export type PaymentsView = {
@@ -365,6 +383,8 @@ export type PaymentsView = {
   rows: PaymentRow[];
   missions: Array<{ id: string; title: string }>;
   finance: CommandCenter["finance"];
+  parties: PartyRecord[];
+  offers: OfferRecord[];
 };
 
 type Workspace = { orgId: string; role: string; orgName: string };
@@ -384,7 +404,7 @@ export async function commandCenter(sql: Sql, userId: string): Promise<CommandCe
   const defectRows = await sql<{ open: unknown }>`select count(*)::int as open from defects
     where organization_id = ${ws.orgId} and status = ${"open"}`;
   const paid = await sql<{ total: unknown }>`select coalesce(sum(amount_cents), 0)::int as total from payments
-    where organization_id = ${ws.orgId} and voided_at is null`;
+    where organization_id = ${ws.orgId} and voided_at is null and direction = ${"receipt"}`;
   await expireLeases(sql);
   const workerRows = await sql<{ status: string; count: unknown }>`
     select status, count(*)::int as count from execution_jobs
@@ -1864,13 +1884,14 @@ export async function payments(sql: Sql, userId: string): Promise<PaymentsView> 
     mission_id: string | null;
     mission_title: string | null;
     created_at: unknown;
-  }>`select p.id, p.payer, p.amount_cents, p.method, p.destination, p.note, p.voided_at, p.mission_id, m.title as mission_title, p.created_at
+    direction: string;
+  }>`select p.id, p.payer, p.amount_cents, p.method, p.destination, p.note, p.voided_at, p.mission_id, m.title as mission_title, p.created_at, p.direction
     from payments p
     left join missions m on m.id = p.mission_id and m.organization_id = p.organization_id
     where p.organization_id = ${ws.orgId}
     order by p.created_at desc limit 40`;
   const total = await sql<{ total: unknown }>`select coalesce(sum(amount_cents), 0)::int as total from payments
-    where organization_id = ${ws.orgId} and voided_at is null`;
+    where organization_id = ${ws.orgId} and voided_at is null and direction = ${"receipt"}`;
   const missions = await listMissions(sql, ws.orgId);
   return {
     destination: PAYMENT,
@@ -1878,6 +1899,8 @@ export async function payments(sql: Sql, userId: string): Promise<PaymentsView> 
     rows: rows.map(toPayment),
     missions: missions.map((mission) => ({ id: mission.id, title: mission.title })),
     finance: await financeSnapshot(sql, ws.orgId),
+    parties: await listParties(sql, ws.orgId),
+    offers: await listOffers(sql, ws.orgId),
   };
 }
 
@@ -1902,6 +1925,46 @@ export async function recordPayment(
   }
   const requested = (input.department ?? "").trim();
   const department = DEPARTMENTS.some((item) => item.slug === requested) ? requested : "";
+  await atomically(sql, async (tx) => {
+    await tx`insert into payments (
+      id, organization_id, mission_id, payer, amount_cents, method, destination, note, created_by, department_slug, direction
+    ) values (
+      ${nid("pay")}, ${ws.orgId}, ${missionId}, ${payer}, ${cents}, ${PAYMENT.method}, ${PAYMENT.cashtag}, ${note}, ${userId}, ${department}, ${"receipt"}
+    )`;
+    await audit(
+      tx,
+      ws,
+      userId,
+      "payment.recorded",
+      missionId ?? ws.orgId,
+      null,
+      null,
+      `${formatMoney(cents)} from ${payer} via ${PAYMENT.method} ${PAYMENT.cashtag}${missionTitle ? ` · ${missionTitle}` : ""}. A receipt does not consume a spending ceiling.`,
+    );
+  });
+}
+
+export async function recordExpenditure(
+  sql: Sql,
+  userId: string,
+  input: { payer: string; amount: string; note: string; missionId: string; department?: string },
+): Promise<void> {
+  const payee = input.payer.trim().replace(/\s+/g, " ");
+  if (payee.length < 2 || payee.length > 80) throw new CompanyError("Name who was paid.");
+  const cents = dollarsToCents(input.amount);
+  if (cents == null) throw new CompanyError("Enter an amount like 25 or 25.00.");
+  const note = input.note.trim().slice(0, 500);
+  const ws = await ensureCompany(sql, userId);
+  assertOwner(ws);
+  let missionId: string | null = null;
+  let missionTitle = "";
+  if (input.missionId.trim()) {
+    const mission = await mustMission(sql, ws.orgId, input.missionId.trim());
+    missionId = mission.id;
+    missionTitle = mission.title;
+  }
+  const requested = (input.department ?? "").trim();
+  const department = DEPARTMENTS.some((item) => item.slug === requested) ? requested : "";
   await commitCharge(sql, {
     orgId: ws.orgId,
     missionId,
@@ -1910,22 +1973,78 @@ export async function recordPayment(
     kind: "charge",
     write: async (tx) => {
       await tx`insert into payments (
-        id, organization_id, mission_id, payer, amount_cents, method, destination, note, created_by, department_slug
+        id, organization_id, mission_id, payer, amount_cents, method, destination, note, created_by, department_slug, direction
       ) values (
-        ${nid("pay")}, ${ws.orgId}, ${missionId}, ${payer}, ${cents}, ${PAYMENT.method}, ${PAYMENT.cashtag}, ${note}, ${userId}, ${department}
+        ${nid("pay")}, ${ws.orgId}, ${missionId}, ${payee}, ${cents}, ${"recorded"}, ${"expenditure"}, ${note}, ${userId}, ${department}, ${"expenditure"}
       )`;
       await audit(
         tx,
         ws,
         userId,
-        "payment.recorded",
+        "payment.spent",
         missionId ?? ws.orgId,
         null,
         null,
-        `${formatMoney(cents)} from ${payer} via ${PAYMENT.method} ${PAYMENT.cashtag}${missionTitle ? ` · ${missionTitle}` : ""}`,
+        `${formatMoney(cents)} to ${payee}${missionTitle ? ` · ${missionTitle}` : ""}. This counts against the spending ceiling. It is not a bank transfer.`,
       );
     },
   });
+}
+
+async function ownerCompany(sql: Sql, userId: string): Promise<Workspace> {
+  const ws = await ensureCompany(sql, userId);
+  assertOwner(ws);
+  return ws;
+}
+
+export async function createCompanyParty(sql: Sql, userId: string, input: { kind: string; displayName: string }): Promise<string> {
+  const ws = await ownerCompany(sql, userId);
+  return createParty(sql, { orgId: ws.orgId, actorId: userId, kind: input.kind, displayName: input.displayName });
+}
+
+export async function editCompanyParty(sql: Sql, userId: string, input: { partyId: string; displayName: string }): Promise<void> {
+  const ws = await ownerCompany(sql, userId);
+  await editParty(sql, { orgId: ws.orgId, actorId: userId, partyId: input.partyId, displayName: input.displayName });
+}
+
+export async function archiveCompanyParty(sql: Sql, userId: string, partyId: string): Promise<void> {
+  const ws = await ownerCompany(sql, userId);
+  await archiveParty(sql, { orgId: ws.orgId, actorId: userId, partyId });
+}
+
+export async function assignCompanyRole(sql: Sql, userId: string, input: { partyId: string; role: string }): Promise<"created" | "exists"> {
+  const ws = await ownerCompany(sql, userId);
+  return assignRole(sql, { orgId: ws.orgId, actorId: userId, partyId: input.partyId, role: input.role });
+}
+
+export async function deactivateCompanyRole(sql: Sql, userId: string, input: { partyId: string; role: string }): Promise<void> {
+  const ws = await ownerCompany(sql, userId);
+  await deactivateRole(sql, { orgId: ws.orgId, actorId: userId, partyId: input.partyId, role: input.role });
+}
+
+export async function reactivateCompanyRole(sql: Sql, userId: string, input: { partyId: string; role: string }): Promise<void> {
+  const ws = await ownerCompany(sql, userId);
+  await reactivateRole(sql, { orgId: ws.orgId, actorId: userId, partyId: input.partyId, role: input.role });
+}
+
+export async function addCompanyContact(sql: Sql, userId: string, input: { partyId: string; label: string; value: string }): Promise<void> {
+  const ws = await ownerCompany(sql, userId);
+  await addContact(sql, { orgId: ws.orgId, actorId: userId, partyId: input.partyId, label: input.label, value: input.value });
+}
+
+export async function createCompanyOffer(sql: Sql, userId: string, input: { kind: string; name: string; price: string }): Promise<void> {
+  const ws = await ownerCompany(sql, userId);
+  await createOffer(sql, { orgId: ws.orgId, actorId: userId, kind: input.kind, name: input.name, price: input.price });
+}
+
+export async function editCompanyOffer(sql: Sql, userId: string, input: { offerId: string; name: string; price: string }): Promise<void> {
+  const ws = await ownerCompany(sql, userId);
+  await editOffer(sql, { orgId: ws.orgId, actorId: userId, offerId: input.offerId, name: input.name, price: input.price });
+}
+
+export async function retireCompanyOffer(sql: Sql, userId: string, offerId: string): Promise<void> {
+  const ws = await ownerCompany(sql, userId);
+  await retireOffer(sql, { orgId: ws.orgId, actorId: userId, offerId });
 }
 
 export async function voidPayment(sql: Sql, userId: string, paymentId: string): Promise<void> {
@@ -1967,7 +2086,8 @@ async function missionPayments(sql: Sql, orgId: string, missionId: string): Prom
     mission_id: string | null;
     mission_title: string | null;
     created_at: unknown;
-  }>`select p.id, p.payer, p.amount_cents, p.method, p.destination, p.note, p.voided_at, p.mission_id, m.title as mission_title, p.created_at
+    direction: string;
+  }>`select p.id, p.payer, p.amount_cents, p.method, p.destination, p.note, p.voided_at, p.mission_id, m.title as mission_title, p.created_at, p.direction
     from payments p
     left join missions m on m.id = p.mission_id and m.organization_id = p.organization_id
     where p.organization_id = ${orgId} and p.mission_id = ${missionId}
@@ -2016,6 +2136,7 @@ function toPayment(row: {
   mission_id: string | null;
   mission_title: string | null;
   created_at: unknown;
+  direction: string;
 }): PaymentRow {
   const voidedAt = iso(row.voided_at);
   return {
@@ -2029,6 +2150,7 @@ function toPayment(row: {
     missionId: row.mission_id,
     missionTitle: row.mission_title,
     createdAt: iso(row.created_at),
+    direction: row.direction === "expenditure" ? "expenditure" : "receipt",
   };
 }
 
@@ -2319,12 +2441,12 @@ export async function commitCharge(sql: Sql, input: {
     await tx`select spending_ceiling_cents from portfolio_limits where organization_id = ${input.orgId} for update`;
     const ceiling = await tx<{ spending_ceiling_cents: unknown }>`select spending_ceiling_cents from portfolio_limits where organization_id = ${input.orgId}`;
     const companySpent = await tx<{ total: unknown }>`select coalesce(sum(amount_cents), 0)::int as total from payments
-      where organization_id = ${input.orgId} and voided_at is null`;
+      where organization_id = ${input.orgId} and voided_at is null and direction = ${"expenditure"}`;
     const companyReserved = await tx<{ total: unknown }>`select coalesce(sum(amount_cents), 0)::int as total from commitments
       where organization_id = ${input.orgId} and status = ${"open"} and kind = ${"reserved"}`;
     const missionSpent = input.missionId
       ? await tx<{ total: unknown }>`select coalesce(sum(amount_cents), 0)::int as total from payments
-          where mission_id = ${input.missionId} and voided_at is null`
+          where mission_id = ${input.missionId} and voided_at is null and direction = ${"expenditure"}`
       : [{ total: 0 }];
     const missionReserved = input.missionId
       ? await tx<{ total: unknown }>`select coalesce(sum(amount_cents), 0)::int as total from commitments
@@ -2339,7 +2461,7 @@ export async function commitCharge(sql: Sql, input: {
       : [];
     const departmentSpent = input.department
       ? await tx<{ total: unknown }>`select coalesce(sum(amount_cents), 0)::int as total from payments
-          where organization_id = ${input.orgId} and department_slug = ${input.department} and voided_at is null`
+          where organization_id = ${input.orgId} and department_slug = ${input.department} and voided_at is null and direction = ${"expenditure"}`
       : [{ total: 0 }];
     const departmentReserved = input.department
       ? await tx<{ total: unknown }>`select coalesce(sum(amount_cents), 0)::int as total from commitments
@@ -2366,7 +2488,9 @@ export async function commitCharge(sql: Sql, input: {
 async function financeSnapshot(sql: Sql, orgId: string): Promise<CommandCenter["finance"]> {
   const ceiling = await sql<{ spending_ceiling_cents: unknown }>`select spending_ceiling_cents from portfolio_limits where organization_id = ${orgId}`;
   const spent = await sql<{ total: unknown }>`select coalesce(sum(amount_cents), 0)::int as total from payments
-    where organization_id = ${orgId} and voided_at is null`;
+    where organization_id = ${orgId} and voided_at is null and direction = ${"expenditure"}`;
+  const received = await sql<{ total: unknown }>`select coalesce(sum(amount_cents), 0)::int as total from payments
+    where organization_id = ${orgId} and voided_at is null and direction = ${"receipt"}`;
   const reserved = await sql<{ total: unknown }>`select coalesce(sum(amount_cents), 0)::int as total from commitments
     where organization_id = ${orgId} and status = ${"open"} and kind = ${"reserved"}`;
   const estimates = await sql<{ total: unknown }>`select coalesce(sum(amount_cents), 0)::int as total from commitments
@@ -2377,6 +2501,7 @@ async function financeSnapshot(sql: Sql, orgId: string): Promise<CommandCenter["
   return {
     ceilingCents,
     spentCents,
+    receivedCents: num(received[0]?.total),
     reservedCents,
     estimateCents: num(estimates[0]?.total),
     remainingCents: ceilingCents == null ? null : ceilingCents - spentCents - reservedCents,
@@ -2908,7 +3033,7 @@ async function ensureCompany(sql: Sql, userId: string): Promise<Workspace> {
   } else {
     const orgId = nid("org");
     try {
-      await sql`insert into organizations (id, name, owner_user_id) values (${orgId}, ${"Atomic Dream Labs"}, ${userId})`;
+      await sql`insert into organizations (id, name, owner_user_id) values (${orgId}, ${"My Workspace"}, ${userId})`;
       await sql`insert into memberships (id, organization_id, user_id, role) values (${nid("mbr")}, ${orgId}, ${userId}, ${"owner"})`;
     } catch (error) {
       if (!isUnique(error)) throw error;
@@ -2928,13 +3053,9 @@ async function ensureCompany(sql: Sql, userId: string): Promise<Workspace> {
       id, organization_id, project_id, task_id, actor_id, actor_kind, action, target, from_state, to_state, detail
     ) values (
       ${nid("aud")}, ${orgId}, ${null}, ${null}, ${userId}, ${"human"}, ${"organization.created"}, ${orgId},
-      ${null}, ${null}, ${"Atomic Dream Labs workspace opened"}
+      ${null}, ${null}, ${"Workspace opened"}
     )`;
-    ws = { orgId, role: "owner", orgName: "Atomic Dream Labs" };
-  }
-  if (ws.orgName === "ADL workspace") {
-    await sql`update organizations set name = ${"Atomic Dream Labs"} where id = ${ws.orgId} and name = ${"ADL workspace"}`;
-    ws = { ...ws, orgName: "Atomic Dream Labs" };
+    ws = { orgId, role: "owner", orgName: "My Workspace" };
   }
   await seed(sql, ws.orgId);
   await sql`insert into scheduler_state (organization_id, status)

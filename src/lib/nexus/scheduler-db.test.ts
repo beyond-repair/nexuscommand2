@@ -83,7 +83,8 @@ test("two ticks cannot hold the lock and a restart still sees a running schedule
       organization_id text,
       mission_id text,
       amount_cents integer,
-      voided_at timestamptz
+      voided_at timestamptz,
+      direction text not null default 'expenditure'
     );
     create table commitments (
       organization_id text,
@@ -153,7 +154,7 @@ test("unresolved specification review and an exhausted ceiling are not scheduled
       organization_id text primary key, max_concurrent integer not null default 1, spending_ceiling_cents integer
     );
     create table spec_impacts (mission_id text, revalidation text);
-    create table payments (organization_id text, mission_id text, amount_cents integer, voided_at timestamptz);
+    create table payments (organization_id text, mission_id text, amount_cents integer, voided_at timestamptz, direction text not null default 'expenditure');
     create table commitments (organization_id text, mission_id text, amount_cents integer, status text, kind text);
     insert into organizations (id, owner_user_id) values ('org_a', 'user_a');
     insert into missions (id, organization_id, status) values ('msn_go', 'org_a', 'AUTHORIZED');
@@ -167,6 +168,8 @@ test("unresolved specification review and an exhausted ceiling are not scheduled
   await db.exec("insert into portfolio_limits (organization_id, max_concurrent, spending_ceiling_cents) values ('org_a', 1, 100)");
   await db.exec("insert into payments (organization_id, mission_id, amount_cents) values ('org_a', 'msn_go', 100)");
   assert.equal(await eligibleMissionId(sql, "org_a"), null);
+  await db.exec("update payments set direction = 'receipt'");
+  assert.equal(await eligibleMissionId(sql, "org_a"), "msn_go");
   await db.close();
 });
 
@@ -206,7 +209,7 @@ test("a running scheduler delivers pending events without a page view, and a sto
     );
     create table portfolio_limits (organization_id text primary key, max_concurrent integer, spending_ceiling_cents integer);
     create table spec_impacts (mission_id text, revalidation text);
-    create table payments (mission_id text, organization_id text, amount_cents integer, voided_at timestamptz);
+    create table payments (mission_id text, organization_id text, amount_cents integer, voided_at timestamptz, direction text not null default 'expenditure');
     create table commitments (mission_id text, organization_id text, amount_cents integer, status text, kind text);
     create table defects (mission_id text, status text);
     create table knowledge_entries (id text primary key, organization_id text, title text, state text, confidence text);

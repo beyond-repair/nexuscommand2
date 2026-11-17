@@ -656,7 +656,7 @@ async function ensureWorkspace(sql: Sql, userId: string): Promise<Workspace> {
   }
   const orgId = nid("org");
   try {
-    await sql`insert into organizations (id, name, owner_user_id) values (${orgId}, ${"ADL workspace"}, ${userId})`;
+    await sql`insert into organizations (id, name, owner_user_id) values (${orgId}, ${"My Workspace"}, ${userId})`;
     await sql`insert into memberships (id, organization_id, user_id, role) values (${nid("mem")}, ${orgId}, ${userId}, ${"owner"})`;
   } catch (error) {
     if (!isUnique(error)) throw error;
@@ -679,7 +679,7 @@ async function ensureWorkspace(sql: Sql, userId: string): Promise<Workspace> {
     to: null,
     detail: "Personal workspace created for the signed-in person",
   });
-  return { orgId, role: "owner", orgName: "ADL workspace" };
+  return { orgId, role: "owner", orgName: "My Workspace" };
 }
 
 async function board(sql: Sql, ws: Workspace): Promise<BoardView> {

@@ -69,14 +69,14 @@ export async function eligibleMissionId(sql: Sql, orgId: string): Promise<string
       )
       and (
         m.budget_cents is null or (
-          coalesce((select sum(amount_cents) from payments p where p.mission_id = m.id and p.voided_at is null), 0)
+          coalesce((select sum(amount_cents) from payments p where p.mission_id = m.id and p.voided_at is null and p.direction = 'expenditure'), 0)
           + coalesce((select sum(amount_cents) from commitments c where c.mission_id = m.id and c.status = ${"open"} and c.kind = ${"reserved"}), 0)
         ) < m.budget_cents
       )
       and (
         (select spending_ceiling_cents from portfolio_limits where organization_id = m.organization_id) is null
         or (
-          coalesce((select sum(amount_cents) from payments p where p.organization_id = m.organization_id and p.voided_at is null), 0)
+          coalesce((select sum(amount_cents) from payments p where p.organization_id = m.organization_id and p.voided_at is null and p.direction = 'expenditure'), 0)
           + coalesce((select sum(amount_cents) from commitments c where c.organization_id = m.organization_id and c.status = ${"open"} and c.kind = ${"reserved"}), 0)
         ) < (select spending_ceiling_cents from portfolio_limits where organization_id = m.organization_id)
       )

@@ -2,7 +2,6 @@ import { createServerFn } from "@tanstack/react-start";
 import { authMiddleware } from "@/lib/auth/middleware";
 import { getSql } from "@/lib/db";
 import type { Thinker, Sql } from "./company-store";
-import { WORKFORCE_MODEL } from "./company";
 import {
   acceptMission,
   answerMission,
@@ -23,6 +22,17 @@ import {
   proposeSpecification,
   recordObservation,
   recordPayment,
+  recordExpenditure,
+  createCompanyParty,
+  editCompanyParty,
+  archiveCompanyParty,
+  assignCompanyRole,
+  deactivateCompanyRole,
+  reactivateCompanyRole,
+  addCompanyContact,
+  createCompanyOffer,
+  editCompanyOffer,
+  retireCompanyOffer,
   recordPrice,
   recoverRun,
   registerDevice,
@@ -79,7 +89,7 @@ async function think(input: { system: string; user: string }): Promise<{ text: s
     const body = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
     const text = body.choices?.[0]?.message?.content ?? "";
     if (!text.trim()) return { text: "", model: "", unavailable: true, outcome: "failed", durationMs, errorCategory: "empty" };
-    return { text, model: WORKFORCE_MODEL, outcome: "succeeded", durationMs };
+    return { text, model: "openai-fast", outcome: "succeeded", durationMs };
   } catch (error) {
     const durationMs = Date.now() - started;
     const timeout = error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
@@ -138,24 +148,55 @@ export const loadCompany = createServerFn({ method: "POST" })
   });
 
 export const companyCommand = createServerFn({ method: "POST" })
-  .validator((input: { type?: string; missionId?: string; objective?: string; note?: string; payer?: string; amount?: string; paymentId?: string; policy?: string; dependsOn?: string; scheduler?: string; classification?: string; parentId?: string; priority?: string; department?: string; secret?: string }) => {
+  .validator((input: {
+    type?: string;
+    missionId?: string;
+    objective?: string;
+    note?: string;
+    payer?: string;
+    amount?: string;
+    paymentId?: string;
+    policy?: string;
+    dependsOn?: string;
+    scheduler?: string;
+    classification?: string;
+    parentId?: string;
+    priority?: string;
+    department?: string;
+    secret?: string;
+    partyId?: string;
+    offerId?: string;
+    role?: string;
+    kind?: string;
+    label?: string;
+    value?: string;
+    name?: string;
+  }) => {
     if (!input || typeof input.type !== "string" || !input.type) throw new Error("Unknown command");
+    const text = (value: unknown) => (typeof value === "string" ? value : "");
     return {
       type: input.type,
-      missionId: typeof input.missionId === "string" ? input.missionId : "",
-      objective: typeof input.objective === "string" ? input.objective : "",
-      note: typeof input.note === "string" ? input.note : "",
-      payer: typeof input.payer === "string" ? input.payer : "",
-      amount: typeof input.amount === "string" ? input.amount : "",
-      paymentId: typeof input.paymentId === "string" ? input.paymentId : "",
-      policy: typeof input.policy === "string" ? input.policy : "",
-      dependsOn: typeof input.dependsOn === "string" ? input.dependsOn : "",
-      scheduler: typeof input.scheduler === "string" ? input.scheduler : "",
-      classification: typeof input.classification === "string" ? input.classification : "",
-      parentId: typeof input.parentId === "string" ? input.parentId : "",
-      priority: typeof input.priority === "string" ? input.priority : "",
-      department: typeof input.department === "string" ? input.department : "",
-      secret: typeof input.secret === "string" ? input.secret : "",
+      missionId: text(input.missionId),
+      objective: text(input.objective),
+      note: text(input.note),
+      payer: text(input.payer),
+      amount: text(input.amount),
+      paymentId: text(input.paymentId),
+      policy: text(input.policy),
+      dependsOn: text(input.dependsOn),
+      scheduler: text(input.scheduler),
+      classification: text(input.classification),
+      parentId: text(input.parentId),
+      priority: text(input.priority),
+      department: text(input.department),
+      secret: text(input.secret),
+      partyId: text(input.partyId),
+      offerId: text(input.offerId),
+      role: text(input.role),
+      kind: text(input.kind),
+      label: text(input.label),
+      value: text(input.value),
+      name: text(input.name),
     };
   })
   .middleware([authMiddleware])
@@ -208,6 +249,56 @@ export const companyCommand = createServerFn({ method: "POST" })
         missionId,
         department: data.department ?? "",
       });
+      return { ok: true as const };
+    }
+    if (data.type === "record-expenditure") {
+      await recordExpenditure(sql, context.userId, {
+        payer: data.payer,
+        amount: data.amount,
+        note: data.note,
+        missionId,
+        department: data.department ?? "",
+      });
+      return { ok: true as const };
+    }
+    if (data.type === "create-party") {
+      await createCompanyParty(sql, context.userId, { kind: data.kind ?? "", displayName: data.name ?? "" });
+      return { ok: true as const };
+    }
+    if (data.type === "edit-party") {
+      await editCompanyParty(sql, context.userId, { partyId: data.partyId ?? "", displayName: data.name ?? "" });
+      return { ok: true as const };
+    }
+    if (data.type === "archive-party") {
+      await archiveCompanyParty(sql, context.userId, data.partyId ?? "");
+      return { ok: true as const };
+    }
+    if (data.type === "assign-role") {
+      await assignCompanyRole(sql, context.userId, { partyId: data.partyId ?? "", role: data.role ?? "" });
+      return { ok: true as const };
+    }
+    if (data.type === "deactivate-role") {
+      await deactivateCompanyRole(sql, context.userId, { partyId: data.partyId ?? "", role: data.role ?? "" });
+      return { ok: true as const };
+    }
+    if (data.type === "reactivate-role") {
+      await reactivateCompanyRole(sql, context.userId, { partyId: data.partyId ?? "", role: data.role ?? "" });
+      return { ok: true as const };
+    }
+    if (data.type === "add-contact") {
+      await addCompanyContact(sql, context.userId, { partyId: data.partyId ?? "", label: data.label ?? "", value: data.value ?? "" });
+      return { ok: true as const };
+    }
+    if (data.type === "create-offer") {
+      await createCompanyOffer(sql, context.userId, { kind: data.kind ?? "", name: data.name ?? "", price: data.amount ?? "" });
+      return { ok: true as const };
+    }
+    if (data.type === "edit-offer") {
+      await editCompanyOffer(sql, context.userId, { offerId: data.offerId ?? "", name: data.name ?? "", price: data.amount ?? "" });
+      return { ok: true as const };
+    }
+    if (data.type === "retire-offer") {
+      await retireCompanyOffer(sql, context.userId, data.offerId ?? "");
       return { ok: true as const };
     }
     if (data.type === "void-payment") {
