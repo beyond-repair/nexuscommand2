@@ -23,7 +23,7 @@ A row is not done because a table or screen exists. It is done when the workflow
 | Integration registry, sealed secrets, GitHub read-only | Tested | `integrations`, `integration_secrets`, `github_*` | GitHub is not authenticated. Writes stay refused |
 | Cross-organization lease denial | Tested | lease test with `org_a` and `org_b` | Not a multi-business product |
 | Projects, tasks, task runs, approvals | Implemented | `0002_nexus.sql` | Not connected to missions. Do not sync them silently |
-| Customers, catalog, orders, invoices, journal, employees, suppliers, tickets | Partial | Parties, offers, quotes, orders, invoices, and the business record are tested. A general journal is not. | Build them on the objects below |
+| Customers, catalog, orders, invoices, journal, employees, suppliers, tickets | Partial | Parties, offers, quotes, orders, invoices, and the claim journal are tested. Support tickets are not. | Build them on the objects below |
 
 `npm test` runs the NEXUS suite, the app suite, and the workspace suite, and exits non-zero if any of them fail. On this tree it exits 0. `npm run build` exits 0. That build is not a deployment. A missing auth flag still means sign-in is on. The share title for this workspace is `ADL NEXUS`.
 
@@ -204,7 +204,7 @@ Acceptance:
 
 ### M6 — Invoice against the existing ledger
 
-Status: Tested on this tree for an order invoiced onto the existing `invoices` table. No second invoice system. No processor. The journal is M7 and is not started.
+Status: Tested on this tree. One number sequence per company, shared by manual issue and order issue. One open invoice per order. Void keeps the invoice, the allocation, and the payment. A voided invoice no longer consumes the receipt. No processor.
 
 Depends on: M5.
 
@@ -232,18 +232,36 @@ Acceptance:
 
 ### M7 — Journal posted only from known records
 
+Status: Tested on this tree. Not a bank ledger and not a second set of books.
+
 Depends on: M6.
 
-Database:
+Chart, per company. These names are claims, not cash:
 
-- `ledger_accounts(id, organization_id, code, name, kind)`
-- `journal_entries(id, organization_id, source_type, source_id, posted_at)`
-- `journal_lines(id, organization_id, entry_id, account_id, debit_cents, credit_cents)`
+| Code | Name | Kind | Normal |
+| --- | --- | --- | --- |
+| 1200 | Claims receivable | asset | debit |
+| 1300 | Receipts applied | asset | debit |
+| 2100 | Claims payable | liability | credit |
+| 4100 | Claims recorded | income | credit |
+| 5100 | Obligations recorded | expense | debit |
+| 5300 | Expenditures applied | expense | debit |
 
-Tasks:
+Posting rules:
 
-- Issuing an invoice posts a balanced entry. Allocating a payment posts a balanced reversing-or-settlement entry. Void posts a reversal. No other writer creates lines.
-- Statements read the journal. If a source is missing, the statement says the figure is unavailable. It does not show zero.
+- Issue a receivable: debit 1200, credit 4100. This records a claim. It does not collect cash.
+- Issue a payable: debit 5100, credit 2100. This records an obligation. It does not spend.
+- Allocate a receipt: debit 1300, credit 1200. This applies a payment-ledger receipt. It does not create one.
+- Allocate an expenditure: debit 2100, credit 5300. This applies a payment-ledger expenditure. It does not create one.
+- Void a receivable of T with A already allocated and O still open: debit 4100 for T, credit 1200 for O, credit 1300 for A. A zero side is omitted.
+- Void a payable: debit 2100 for O, debit 5300 for A, credit 5100 for T.
+- A draft void posts nothing. A number is assigned only at issue and is never reused.
+
+Database: `ledger_accounts`, `journal_entries`, `journal_lines`. One entry per organization, source type, and source id. Source types are `invoice.issued`, `invoice.allocated`, and `invoice.void`.
+
+The recorded margin still comes from receipts minus expenditures. Posted claim balances come from the journal. If an issued invoice has no posting, that posted figure is unavailable. It is not shown as zero.
+
+What it does not do: client-entered journal lines, edits to a posted row, cash accounting, or a bank balance.
 
 Acceptance:
 
@@ -251,6 +269,9 @@ Acceptance:
 - Re-running the post for the same source does not create a second entry.
 - An agent cannot post.
 - A manual journal line from the client is rejected.
+- A failed post rolls back the invoice change in the same transaction.
+- Posted rows cannot be updated or deleted.
+- Voiding does not delete the payment or the allocation.
 
 ### M8 — Support
 
