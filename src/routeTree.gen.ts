@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AuditRouteImport } from './routes/audit'
 import { Route as BlueprintRouteImport } from './routes/blueprint'
+import { Route as BusinessRouteImport } from './routes/business'
 import { Route as GovernanceRouteImport } from './routes/governance'
 import { Route as KnowledgeRouteImport } from './routes/knowledge'
 import { Route as LoginRouteImport } from './routes/login'
@@ -37,6 +38,11 @@ const AuditRoute = AuditRouteImport.update({
 const BlueprintRoute = BlueprintRouteImport.update({
   id: '/blueprint',
   path: '/blueprint',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const BusinessRoute = BusinessRouteImport.update({
+  id: '/business',
+  path: '/business',
   getParentRoute: () => rootRouteImport,
 } as any)
 const GovernanceRoute = GovernanceRouteImport.update({
@@ -99,6 +105,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/audit': typeof AuditRoute
   '/blueprint': typeof BlueprintRoute
+  '/business': typeof BusinessRoute
   '/governance': typeof GovernanceRoute
   '/knowledge': typeof KnowledgeRoute
   '/login': typeof LoginRoute
@@ -115,6 +122,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/audit': typeof AuditRoute
   '/blueprint': typeof BlueprintRoute
+  '/business': typeof BusinessRoute
   '/governance': typeof GovernanceRoute
   '/knowledge': typeof KnowledgeRoute
   '/login': typeof LoginRoute
@@ -132,6 +140,7 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/audit': typeof AuditRoute
   '/blueprint': typeof BlueprintRoute
+  '/business': typeof BusinessRoute
   '/governance': typeof GovernanceRoute
   '/knowledge': typeof KnowledgeRoute
   '/login': typeof LoginRoute
@@ -150,6 +159,7 @@ export interface FileRouteTypes {
     | '/'
     | '/audit'
     | '/blueprint'
+    | '/business'
     | '/governance'
     | '/knowledge'
     | '/login'
@@ -166,6 +176,7 @@ export interface FileRouteTypes {
     | '/'
     | '/audit'
     | '/blueprint'
+    | '/business'
     | '/governance'
     | '/knowledge'
     | '/login'
@@ -182,6 +193,7 @@ export interface FileRouteTypes {
     | '/'
     | '/audit'
     | '/blueprint'
+    | '/business'
     | '/governance'
     | '/knowledge'
     | '/login'
@@ -199,6 +211,7 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AuditRoute: typeof AuditRoute
   BlueprintRoute: typeof BlueprintRoute
+  BusinessRoute: typeof BusinessRoute
   GovernanceRoute: typeof GovernanceRoute
   KnowledgeRoute: typeof KnowledgeRoute
   LoginRoute: typeof LoginRoute
@@ -233,6 +246,13 @@ declare module '@tanstack/react-router' {
       path: '/blueprint'
       fullPath: '/blueprint'
       preLoaderRoute: typeof BlueprintRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/business': {
+      id: '/business'
+      path: '/business'
+      fullPath: '/business'
+      preLoaderRoute: typeof BusinessRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/governance': {
@@ -319,6 +339,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AuditRoute: AuditRoute,
   BlueprintRoute: BlueprintRoute,
+  BusinessRoute: BusinessRoute,
   GovernanceRoute: GovernanceRoute,
   KnowledgeRoute: KnowledgeRoute,
   LoginRoute: LoginRoute,

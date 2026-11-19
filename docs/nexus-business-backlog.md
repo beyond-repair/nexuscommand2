@@ -18,12 +18,12 @@ A row is not done because a table or screen exists. It is done when the workflow
 | Independent QA bound to an artifact hash | Tested | `qa_reports`, sandbox | A new report must not cover a changed artifact |
 | Leases, fencing, scheduler run/pause/stop, dead letter | Tested | `execution_jobs`, `scheduler_state` | Pause and stop do not drain or start work |
 | Outbox delivery receipt | Tested | `outbox_events`, `outbox_deliveries` | Delivery does not authorize, accept, or move money |
-| Spending ceiling, commitments, payment records | Tested | `payments`, `commitments`, `department_budgets` | Not a general ledger and not a bank transfer |
+| Spending ceiling, commitments, payment records | Tested | `payments.direction` separates receipts from expenditures. Receipts do not consume a ceiling. | Not a general ledger and not a bank transfer |
 | Specification versions and requirement links | Tested | `specifications`, `requirements` | Do not overwrite an accepted version |
 | Integration registry, sealed secrets, GitHub read-only | Tested | `integrations`, `integration_secrets`, `github_*` | GitHub is not authenticated. Writes stay refused |
 | Cross-organization lease denial | Tested | lease test with `org_a` and `org_b` | Not a multi-business product |
 | Projects, tasks, task runs, approvals | Implemented | `0002_nexus.sql` | Not connected to missions. Do not sync them silently |
-| Customers, catalog, orders, invoices, journal, employees, suppliers, tickets | Not started | no tables | Build them on the objects below |
+| Customers, catalog, orders, invoices, journal, employees, suppliers, tickets | Partial | Parties, offers, quotes, orders, invoices, and the business record are tested. A general journal is not. | Build them on the objects below |
 
 `npm test` runs the NEXUS suite, the app suite, and the workspace suite, and exits non-zero if any of them fail. On this tree it exits 0. `npm run build` exits 0. That build is not a deployment. A missing auth flag still means sign-in is on. The share title for this workspace is `ADL NEXUS`.
 
@@ -100,6 +100,8 @@ Acceptance:
 
 ### M3 — Party
 
+Status: Tested on this tree. Archive keeps contacts. An inactive role must be reactivated. A role cannot point at another company's party.
+
 Depends on: M2.
 
 Database:
@@ -123,6 +125,8 @@ Acceptance:
 
 ### M4 — Catalog
 
+Status: Tested on this tree. A price is integer cents and is not a charge.
+
 Depends on: M3.
 
 Database: `offers(id, organization_id, kind, name, status, price_cents, currency, created_at)`. `kind` is `product` or `service`. Price is a recorded amount, not a charge.
@@ -139,7 +143,38 @@ Acceptance:
 - Price is integer cents or the write is rejected.
 - An agent cannot publish an offer.
 
+### Business operating record
+
+Status: Tested on this tree. Not a law firm, a bank, or a second company.
+
+Depends on: parties, offers, and the payment ledger.
+
+Database: `ventures`, `obligations`, `filings`, `instruments`, `capital_items`, `invoices`, `invoice_allocations`, `product_briefs`, `campaigns`, `market_notes`, `procedures`, `positions`, `engagements`, `stock_counts`.
+
+What it does:
+
+- One business record per company. Opening it creates obligations across formation, governance, finance, product, market, operations, people, and launch authority.
+- Research obligations can be prepared and staffed as a proposed mission. The mission is not authorized to execute.
+- Restricted obligations cannot open a mission. The owner records that a person acted outside NEXUS.
+- Launch readiness stays closed until a person records launch authorization on `launch_authorizations`. A waiver, a fulfilled obligation, and a finished mission do not open it. Operating stays closed until readiness is recorded. An outside action is stored on `external_action_records` and is not a verification.
+- Invoices are claims. A receivable allocates only a receipt. A payable allocates only an expenditure. Issuing an invoice creates no payment.
+- Capital and campaign budgets are plans. Marking funding received, or authorizing a campaign, does not write a payment.
+- A procedure is an executable definition: owner, trigger, inputs, actions, outputs, exceptions, verification. Running it opens a proposed mission.
+- Positions are employees or contractors, engaged only when the party has that role. Agents cannot hold one.
+- Stock is a count the owner writes. A sale does not change it.
+- The recorded margin is receipts minus expenditures. It is not a bank balance.
+
+What it does not do: legal advice, government submission, trademark registration, tax filing, banking, payroll calculation, ad publication, or live payment processing.
+
+Acceptance:
+
+- An agent cannot open the record, staff work, allocate money, or engage a person.
+- Another company cannot read or attach the record.
+- A restricted obligation does not create a mission or a filing.
+
 ### M5 — Quote and order
+
+Status: Tested on this tree. Acceptance creates an order. It does not take payment and it does not authorize a mission.
 
 Depends on: M1, M4.
 
@@ -168,6 +203,8 @@ Acceptance:
 - Cancelling an order does not cancel a mission.
 
 ### M6 — Invoice against the existing ledger
+
+Status: Tested on this tree for an order invoiced onto the existing `invoices` table. No second invoice system. No processor. The journal is M7 and is not started.
 
 Depends on: M5.
 

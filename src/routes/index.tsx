@@ -217,6 +217,17 @@ function Command() {
             </div>
           ))}
         </dl>
+        <section className="mt-8 border border-line bg-surface px-4 py-4">
+          <div className="flex items-baseline justify-between gap-3">
+            <h2 className="text-sm font-medium">Business</h2>
+            <Link to="/business" className="text-sm text-accent">Open the record</Link>
+          </div>
+          <p className="mt-2 text-sm text-muted">
+            {data.business.name
+              ? `${data.business.name} is in ${data.business.stage}. ${data.business.openObligations} obligations are still open. ${data.business.restrictedOpen} must be done by a person, not an agent.`
+              : "No business record yet. Opening one coordinates formation, money, product, market, operations, and people. It does not create a second company."}
+          </p>
+        </section>
 
         <form onSubmit={(event) => void submit(event)} className="mt-8">
           <label htmlFor="mission" className="text-sm font-medium">

@@ -49,6 +49,6 @@ These are the acceptance principles for every milestone. A milestone that weaken
 
 ## Sequence
 
-M0 through M17 in the backlog remain the build order. M0 is tested on this tree and is not a deployment. M1 is the next implementation milestone. Later milestones are not started.
+M0 through M17 in the backlog remain the build order. M0, M1, and M2 are tested on this tree and are not a deployment. Parties, offers, the business operating record, quotes, orders, and invoices against that record are tested on this tree. They coordinate one company. They do not file, bank, publish, or bind it. A quote is not an order. An order is not a payment or a mission authorization. An invoice is not a receipt and does not consume a spending ceiling. The journal is not started.
 
 The workforce that already runs inside one organization is part of this definition. It is not a prototype to be replaced by the business modules.

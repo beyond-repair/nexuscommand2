@@ -5,6 +5,7 @@ import { useCurrentUserState } from "@/lib/auth/use-current-user";
 
 const LINKS = [
   { to: "/", label: "Command" },
+  { to: "/business", label: "Business" },
   { to: "/missions", label: "Missions" },
   { to: "/workforce", label: "Workforce" },
   { to: "/operations", label: "Operations" },

@@ -63,7 +63,9 @@ import {
   unlinkMissionTask,
   voidPayment,
   workforce,
+  requireOwnerScope,
 } from "./company-store";
+import { loadBusiness } from "./venture";
 import { assertCommandRate } from "./command-rate";
 import { schedulerTick } from "./scheduler";
 
@@ -128,7 +130,8 @@ export const loadCompany = createServerFn({ method: "POST" })
       view !== "operations" &&
       view !== "knowledge" &&
       view !== "governance" &&
-      view !== "payments"
+      view !== "payments" &&
+      view !== "business"
     ) {
       throw new Error("Unknown view");
     }
@@ -144,6 +147,7 @@ export const loadCompany = createServerFn({ method: "POST" })
     if (data.view === "operations") return operations(sql, context.userId);
     if (data.view === "knowledge") return knowledge(sql, context.userId);
     if (data.view === "payments") return payments(sql, context.userId);
+    if (data.view === "business") return loadBusiness(sql, (await requireOwnerScope(sql, context.userId)).orgId);
     return governance(sql, context.userId);
   });
 

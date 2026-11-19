@@ -73,6 +73,7 @@ import {
   type PriceCard,
   type UnknownCostPolicy,
 } from "./world.ts";
+import { ventureSummary } from "./venture.ts";
 import {
   addContact,
   archiveParty,
@@ -169,6 +170,12 @@ export type CommandCenter = {
     estimateCents: number;
     remainingCents: number | null;
     utilization: number | null;
+  };
+  business: {
+    name: string | null;
+    stage: string | null;
+    openObligations: number;
+    restrictedOpen: number;
   };
   providers: Array<{
     provider: string;
@@ -449,6 +456,7 @@ export async function commandCenter(sql: Sql, userId: string): Promise<CommandCe
     handoffs: await recentHandoffs(sql, ws.orgId),
     changes: await recentChanges(sql, ws.orgId),
     finance: await financeSnapshot(sql, ws.orgId),
+    business: await ventureSummary(sql, ws.orgId),
     providers: await providerSnapshot(sql, ws.orgId),
     world: await worldSnapshot(sql, ws.orgId),
   };
@@ -3281,6 +3289,12 @@ async function latestQa(sql: Sql, orgId: string, missionId: string, currentHtml:
 
 function assertOwner(ws: Workspace): void {
   if (ws.role !== "owner") throw new CompanyError("Only the owner can direct the company.");
+}
+
+export async function requireOwnerScope(sql: Sql, userId: string): Promise<{ orgId: string; orgName: string }> {
+  const ws = await ensureCompany(sql, userId);
+  assertOwner(ws);
+  return { orgId: ws.orgId, orgName: ws.orgName };
 }
 
 function readStrings(value: unknown): string[] {
