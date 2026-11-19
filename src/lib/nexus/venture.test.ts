@@ -29,7 +29,9 @@ import {
   linkOrderMission,
   loadBusiness,
   openVenture,
+  postBalancedEntry,
   recordRestricted,
+  refuseManualJournal,
   runProcedure,
   setCapitalStatus,
   setStage,
@@ -360,5 +362,131 @@ test("a quote becomes an order without payment, and an invoice does not spend", 
     "insert into order_mission_links (organization_id, order_id, mission_id, linked_by) values ($1, $2, $3, $4)",
     [orgId, orderId, foreignMission, owner],
   ));
+  await db.close();
+});
+
+test("invoice numbers, voids, and journal entries stay on the claim", async () => {
+  const { db, sql } = await migrated();
+  const owner = "user_journal";
+  const orgId = (await commandCenter(sql, owner)).organization.id;
+  await setSpendingCeiling(sql, owner, "100.00");
+  const customer = await createParty(sql, { orgId, actorId: owner, kind: "person", displayName: "Ada Client" });
+  const supplier = await createParty(sql, { orgId, actorId: owner, kind: "organization", displayName: "Supply Co" });
+  await assignRole(sql, { orgId, actorId: owner, partyId: customer, role: "customer" });
+  await assignRole(sql, { orgId, actorId: owner, partyId: supplier, role: "supplier" });
+  await createInvoice(sql, { orgId, actorId: owner, direction: "receivable", partyId: customer, offerId: "", title: "Draft only", amount: "5.00" });
+  const draft = (await loadBusiness(sql, orgId)).invoices[0];
+  assert.ok(draft);
+  await voidInvoice(sql, { orgId, actorId: owner, invoiceId: draft.id });
+  assert.equal((await db.query<{ number: string | null }>("select number from invoices where id = $1", [draft.id])).rows[0]?.number, null);
+  assert.equal((await db.query<{ n: number }>("select count(*)::int as n from journal_entries")).rows[0]?.n, 0);
+
+  await createInvoice(sql, { orgId, actorId: owner, direction: "receivable", partyId: customer, offerId: "", title: "Setup", amount: "40.00" });
+  const open = (await loadBusiness(sql, orgId)).invoices.find((item) => item.status === "draft");
+  assert.ok(open);
+  assert.ok(sql.transaction);
+  await assert.rejects(sql.transaction(async (tx) => {
+    await tx`update invoices set title = ${"Changed"} where id = ${open.id}`;
+    await postBalancedEntry(tx, {
+      orgId, actorId: owner, sourceType: "invoice.issued", sourceId: open.id,
+      lines: [{ code: "1200", debitCents: 100, creditCents: 0 }, { code: "4100", debitCents: 0, creditCents: 40 }],
+    });
+  }), /must balance/);
+  assert.equal((await db.query<{ title: string }>("select title from invoices where id = $1", [open.id])).rows[0]?.title, "Setup");
+  assert.equal((await db.query<{ status: string }>("select status from invoices where id = $1", [open.id])).rows[0]?.status, "draft");
+
+  await assert.rejects(postBalancedEntry(sql, {
+    orgId, actorId: "svc:nexus", sourceType: "invoice.issued", sourceId: open.id,
+    lines: [{ code: "1200", debitCents: 100, creditCents: 0 }, { code: "4100", debitCents: 0, creditCents: 100 }],
+  }), /agent cannot/);
+  assert.throws(() => refuseManualJournal(), /cannot be entered/);
+  await issueInvoice(sql, { orgId, actorId: owner, invoiceId: open.id });
+  const issued = (await loadBusiness(sql, orgId)).invoices.find((item) => item.id === open.id);
+  assert.equal(issued?.number, "INV-0001");
+  assert.equal(issued?.posted, true);
+  assert.equal((await loadBusiness(sql, orgId)).statement.journalClaimsCents, 4000);
+  assert.equal((await commandCenter(sql, owner)).finance.remainingCents, 10000);
+  assert.equal((await db.query("select id from payments")).rows.length, 0);
+  const issueLines = (await loadBusiness(sql, orgId)).journal.find((entry) => entry.sourceType === "invoice.issued")?.lines ?? [];
+  assert.equal(issueLines.reduce((sum, line) => sum + line.debitCents, 0), 4000);
+  assert.equal(issueLines.reduce((sum, line) => sum + line.creditCents, 0), 4000);
+
+  await recordPayment(sql, owner, { payer: "Ada Client", amount: "40.00", note: "arrived", missionId: "" });
+  const receipt = (await loadBusiness(sql, orgId)).payments.find((row) => row.direction === "receipt");
+  assert.ok(receipt);
+  await allocatePayment(sql, { orgId, actorId: owner, invoiceId: open.id, paymentId: receipt.id, amount: "15.00" });
+  const allocationId = (await db.query<{ id: string }>("select id from invoice_allocations where invoice_id = $1", [open.id])).rows[0]?.id;
+  assert.ok(allocationId);
+  const beforeLines = (await db.query<{ n: number }>("select count(*)::int as n from journal_lines")).rows[0]?.n;
+  await postBalancedEntry(sql, {
+    orgId, actorId: owner, sourceType: "invoice.allocated", sourceId: allocationId,
+    lines: [{ code: "1300", debitCents: 1500, creditCents: 0 }, { code: "1200", debitCents: 0, creditCents: 1500 }],
+  });
+  assert.equal((await db.query<{ n: number }>("select count(*)::int as n from journal_entries")).rows[0]?.n, 2);
+  assert.equal((await db.query<{ n: number }>("select count(*)::int as n from journal_lines")).rows[0]?.n, beforeLines);
+  let books = await loadBusiness(sql, orgId);
+  assert.equal(books.statement.receivableCents, 2500);
+  assert.equal(books.statement.journalClaimsCents, 2500);
+  assert.equal(books.payments.find((row) => row.id === receipt.id)?.allocatedCents, 1500);
+
+  await voidInvoice(sql, { orgId, actorId: owner, invoiceId: open.id });
+  books = await loadBusiness(sql, orgId);
+  const voided = books.invoices.find((item) => item.id === open.id);
+  assert.equal(voided?.status, "void");
+  assert.equal(voided?.number, "INV-0001");
+  assert.equal((await db.query("select id from payments")).rows.length, 1);
+  assert.equal((await db.query("select id from invoice_allocations where invoice_id = $1", [open.id])).rows.length, 1);
+  assert.equal(books.statement.receivableCents, 0);
+  assert.equal(books.statement.journalClaimsCents, 0);
+  assert.equal(books.payments.find((row) => row.id === receipt.id)?.allocatedCents, 0);
+  const voidEntry = books.journal.find((entry) => entry.sourceType === "invoice.void");
+  assert.ok(voidEntry);
+  assert.equal(voidEntry.lines.reduce((sum, line) => sum + line.debitCents, 0), voidEntry.lines.reduce((sum, line) => sum + line.creditCents, 0));
+  assert.equal(voidEntry.lines.some((line) => line.code === "1300" && line.creditCents === 1500), true);
+  assert.equal(voidEntry.lines.some((line) => line.code === "1200" && line.creditCents === 2500), true);
+  await assert.rejects(db.query("update journal_entries set source_type = 'invoice.issued' where organization_id = $1", [orgId]));
+  await assert.rejects(db.query("delete from journal_lines where organization_id = $1", [orgId]));
+
+  await createInvoice(sql, { orgId, actorId: owner, direction: "receivable", partyId: customer, offerId: "", title: "Next", amount: "1.00" });
+  const next = (await loadBusiness(sql, orgId)).invoices.find((item) => item.status === "draft");
+  assert.ok(next);
+  await issueInvoice(sql, { orgId, actorId: owner, invoiceId: next.id });
+  assert.equal((await loadBusiness(sql, orgId)).invoices.find((item) => item.id === next.id)?.number, "INV-0002");
+
+  await createInvoice(sql, { orgId, actorId: owner, direction: "payable", partyId: supplier, offerId: "", title: "Parts", amount: "10.00" });
+  const payable = (await loadBusiness(sql, orgId)).invoices.find((item) => item.title === "Parts");
+  assert.ok(payable);
+  await issueInvoice(sql, { orgId, actorId: owner, invoiceId: payable.id });
+  assert.equal((await commandCenter(sql, owner)).finance.remainingCents, 10000);
+  assert.equal((await loadBusiness(sql, orgId)).statement.journalObligationsCents, 1000);
+  await recordExpenditure(sql, owner, { payer: "Supply Co", amount: "10.00", note: "parts", missionId: "" });
+  assert.equal((await commandCenter(sql, owner)).finance.remainingCents, 9000);
+  const spend = (await loadBusiness(sql, orgId)).payments.find((row) => row.direction === "expenditure");
+  assert.ok(spend);
+  await allocatePayment(sql, { orgId, actorId: owner, invoiceId: payable.id, paymentId: spend.id, amount: "10.00" });
+  assert.equal((await loadBusiness(sql, orgId)).statement.journalObligationsCents, 0);
+  assert.equal((await commandCenter(sql, owner)).finance.remainingCents, 9000);
+
+  await createInvoice(sql, { orgId, actorId: owner, direction: "receivable", partyId: customer, offerId: "", title: "Parallel A", amount: "2.00" });
+  await createInvoice(sql, { orgId, actorId: owner, direction: "receivable", partyId: customer, offerId: "", title: "Parallel B", amount: "3.00" });
+  const parallel = (await loadBusiness(sql, orgId)).invoices.filter((item) => item.status === "draft");
+  assert.equal(parallel.length, 2);
+  await Promise.all(parallel.map((item) => issueInvoice(sql, { orgId, actorId: owner, invoiceId: item.id })));
+  const parallelNumbers = (await loadBusiness(sql, orgId)).invoices
+    .filter((item) => item.title === "Parallel A" || item.title === "Parallel B")
+    .map((item) => item.number)
+    .sort();
+  assert.deepEqual(parallelNumbers, ["INV-0004", "INV-0005"]);
+
+  await db.query(
+    "insert into invoices (id, organization_id, direction, party_id, title, amount_cents, status, created_by) values ($1, $2, 'receivable', $3, 'Unposted', 300, 'issued', $4)",
+    ["inv_gap", orgId, customer, owner],
+  );
+  assert.equal((await loadBusiness(sql, orgId)).statement.journalClaimsCents, null);
+  assert.equal((await loadBusiness(sql, orgId)).invoices.find((item) => item.id === "inv_gap")?.posted, false);
+
+  const other = (await commandCenter(sql, "user_other_journal")).organization.id;
+  assert.equal((await loadBusiness(sql, other)).journal.length, 0);
+  assert.equal(JSON.stringify(await loadBusiness(sql, other)).includes("INV-0001"), false);
   await db.close();
 });

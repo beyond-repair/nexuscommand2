@@ -67,6 +67,8 @@ export type BusinessStatement = {
   fundingMarkedReceivedCents: number;
   receivableCents: number;
   payableCents: number;
+  journalClaimsCents: number | null;
+  journalObligationsCents: number | null;
   note: string;
 };
 
@@ -76,11 +78,12 @@ export type BusinessView = {
   filings: Array<{ id: string; kind: string; jurisdiction: string; status: string; deadline: string; note: string }>;
   instruments: Array<{ id: string; kind: string; title: string; body: string; status: string }>;
   capital: Array<{ id: string; kind: string; name: string; amountCents: number; fundingKind: string; status: string; note: string }>;
-  invoices: Array<{ id: string; direction: string; partyId: string | null; partyName: string; title: string; amountCents: number; status: string; allocatedCents: number; number: string | null; orderId: string | null }>;
+  invoices: Array<{ id: string; direction: string; partyId: string | null; partyName: string; title: string; amountCents: number; status: string; allocatedCents: number; number: string | null; orderId: string | null; posted: boolean }>;
   quotes: Array<{ id: string; partyId: string; partyName: string; status: string; note: string; totalCents: number; lines: Array<{ id: string; offerName: string; quantity: number; amountCents: number }> }>;
   orders: Array<{ id: string; partyName: string; quoteId: string; status: string; note: string; totalCents: number; missionIds: string[]; invoiceNumber: string | null }>;
   missions: Array<{ id: string; title: string; status: string }>;
   payments: Array<{ id: string; payer: string; direction: string; amountCents: number; allocatedCents: number }>;
+  journal: Array<{ id: string; sourceType: string; sourceId: string; lines: Array<{ code: string; name: string; debitCents: number; creditCents: number }> }>;
   briefs: Array<{ id: string; offerId: string | null; offerName: string; problem: string; requirements: string; valueProposition: string; costCents: number | null; feedback: string }>;
   campaigns: Array<{ id: string; name: string; segment: string; channel: string; status: string; budgetCents: number; note: string }>;
   notes: Array<{ id: string; kind: string; name: string; detail: string }>;
@@ -385,6 +388,87 @@ async function partyRole(sql: Sql, orgId: string, partyId: string, role: string)
   if (!rows[0]) throw new CompanyError(`That party needs an active ${role} role in this company.`);
 }
 
+const CHART = [
+  { code: "1200", name: "Claims receivable", kind: "asset" },
+  { code: "1300", name: "Receipts applied", kind: "asset" },
+  { code: "2100", name: "Claims payable", kind: "liability" },
+  { code: "4100", name: "Claims recorded", kind: "income" },
+  { code: "5100", name: "Obligations recorded", kind: "expense" },
+  { code: "5300", name: "Expenditures applied", kind: "expense" },
+] as const;
+
+type JournalLine = { code: string; debitCents: number; creditCents: number };
+
+export function refuseManualJournal(): never {
+  throw new CompanyError("A journal line cannot be entered from here. Entries post only when an invoice is issued, allocated, or voided.");
+}
+
+async function ensureChart(sql: Sql, orgId: string): Promise<void> {
+  for (const account of CHART) {
+    await sql`insert into ledger_accounts (id, organization_id, code, name, kind)
+      values (${`${orgId}:${account.code}`}, ${orgId}, ${account.code}, ${account.name}, ${account.kind})
+      on conflict (organization_id, code) do nothing`;
+  }
+}
+
+export async function postBalancedEntry(sql: Sql, input: {
+  orgId: string; actorId: string; sourceType: string; sourceId: string; lines: JournalLine[];
+}): Promise<void> {
+  refuseAgent(input.actorId, "post a journal entry");
+  if (input.sourceType !== "invoice.issued" && input.sourceType !== "invoice.allocated" && input.sourceType !== "invoice.void") {
+    throw new CompanyError("A journal entry can only post from an invoice issue, allocation, or void.");
+  }
+  if (!input.sourceId.trim()) throw new CompanyError("A journal entry needs the record it came from.");
+  const allowed = new Set<string>(CHART.map((account) => account.code));
+  let debit = 0;
+  let credit = 0;
+  const lines: JournalLine[] = [];
+  for (const line of input.lines) {
+    if (!allowed.has(line.code)) throw new CompanyError("That account is not on the chart.");
+    const dr = line.debitCents;
+    const cr = line.creditCents;
+    if (!Number.isInteger(dr) || !Number.isInteger(cr) || dr < 0 || cr < 0 || (dr > 0 && cr > 0) || (dr === 0 && cr === 0)) {
+      throw new CompanyError("Each journal line is a debit or a credit, not both.");
+    }
+    debit += dr;
+    credit += cr;
+    lines.push({ code: line.code, debitCents: dr, creditCents: cr });
+  }
+  if (lines.length < 2 || debit !== credit || debit < 1) throw new CompanyError("A journal entry must balance.");
+  await ensureChart(sql, input.orgId);
+  const inserted = await sql<{ id: string }>`insert into journal_entries (id, organization_id, source_type, source_id, created_by)
+    values (${nid("jrn")}, ${input.orgId}, ${input.sourceType}, ${input.sourceId}, ${input.actorId})
+    on conflict (organization_id, source_type, source_id) do nothing
+    returning id`;
+  if (!inserted[0]) return;
+  for (const line of lines) {
+    await sql`insert into journal_lines (id, organization_id, entry_id, account_id, debit_cents, credit_cents)
+      values (${nid("jln")}, ${input.orgId}, ${inserted[0].id}, ${`${input.orgId}:${line.code}`}, ${line.debitCents}, ${line.creditCents})`;
+  }
+}
+
+async function nextInvoiceNumber(sql: Sql, orgId: string): Promise<string> {
+  const rows = await sql<{ n: unknown }>`insert into invoice_sequences (organization_id, last_number)
+    values (${orgId}, 1)
+    on conflict (organization_id) do update set last_number = invoice_sequences.last_number + 1
+    returning last_number as n`;
+  const n = num(rows[0]?.n);
+  if (n < 1) throw new CompanyError("Could not assign an invoice number. Nothing was issued.");
+  return `INV-${String(n).padStart(4, "0")}`;
+}
+
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function isNumberCollision(error: unknown): boolean {
+  return errorText(error).includes("invoices_org_number");
+}
+
+function isOpenOrderCollision(error: unknown): boolean {
+  return errorText(error).includes("invoices_one_open_order");
+}
+
 export async function createInvoice(sql: Sql, input: {
   orgId: string; actorId: string; direction: string; partyId: string; offerId: string; title: string; amount: string;
 }): Promise<void> {
@@ -407,17 +491,74 @@ export async function createInvoice(sql: Sql, input: {
 
 export async function issueInvoice(sql: Sql, input: { orgId: string; actorId: string; invoiceId: string }): Promise<void> {
   refuseAgent(input.actorId, "issue an invoice");
-  const rows = await sql<{ id: string }>`update invoices set status = ${"issued"}
-    where id = ${input.invoiceId} and organization_id = ${input.orgId} and status = ${"draft"} returning id`;
-  if (!rows[0]) throw new CompanyError("That draft invoice is not in this company.");
-  await audit(sql, input.orgId, input.actorId, "invoice.issued", rows[0].id, "Issued. No payment was created.");
+  if (!sql.transaction) throw new CompanyError("The books lock is unavailable. No invoice was issued.");
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      await sql.transaction(async (tx) => {
+        const invoice = await tx<{ id: string; direction: string; amount_cents: unknown; status: string; number: string | null }>`
+          select id, direction, amount_cents, status, number from invoices
+          where id = ${input.invoiceId} and organization_id = ${input.orgId} for update`;
+        if (!invoice[0] || invoice[0].status !== "draft") throw new CompanyError("That draft invoice is not in this company.");
+        const number = invoice[0].number ?? await nextInvoiceNumber(tx, input.orgId);
+        const rows = await tx<{ id: string }>`update invoices set status = ${"issued"}, number = ${number}
+          where id = ${invoice[0].id} and organization_id = ${input.orgId} and status = ${"draft"} returning id`;
+        if (!rows[0]) throw new CompanyError("That draft invoice is not in this company.");
+        const amount = num(invoice[0].amount_cents);
+        const lines = invoice[0].direction === "payable"
+          ? [{ code: "5100", debitCents: amount, creditCents: 0 }, { code: "2100", debitCents: 0, creditCents: amount }]
+          : [{ code: "1200", debitCents: amount, creditCents: 0 }, { code: "4100", debitCents: 0, creditCents: amount }];
+        await postBalancedEntry(tx, {
+          orgId: input.orgId, actorId: input.actorId, sourceType: "invoice.issued", sourceId: rows[0].id, lines,
+        });
+        await audit(tx, input.orgId, input.actorId, "invoice.issued", rows[0].id, `${number} issued. No payment was created.`);
+      });
+      return;
+    } catch (error) {
+      if (error instanceof CompanyError) throw error;
+      if (isNumberCollision(error) && attempt < 2) continue;
+      throw error;
+    }
+  }
+  throw new CompanyError("Could not assign an invoice number. Nothing was issued.");
 }
 
 export async function voidInvoice(sql: Sql, input: { orgId: string; actorId: string; invoiceId: string }): Promise<void> {
   refuseAgent(input.actorId, "void an invoice");
-  const rows = await sql<{ id: string }>`update invoices set status = ${"void"}
-    where id = ${input.invoiceId} and organization_id = ${input.orgId} and status in (${"draft"}, ${"issued"}) returning id`;
-  if (!rows[0]) throw new CompanyError("That invoice is not open in this company.");
+  if (!sql.transaction) throw new CompanyError("The books lock is unavailable. Nothing was voided.");
+  await sql.transaction(async (tx) => {
+    const invoice = await tx<{ id: string; direction: string; amount_cents: unknown; status: string }>`
+      select id, direction, amount_cents, status from invoices
+      where id = ${input.invoiceId} and organization_id = ${input.orgId} for update`;
+    if (!invoice[0] || (invoice[0].status !== "draft" && invoice[0].status !== "issued")) {
+      throw new CompanyError("That invoice is not open in this company.");
+    }
+    const applied = await tx<{ total: unknown }>`select coalesce(sum(amount_cents), 0)::int as total from invoice_allocations
+      where invoice_id = ${invoice[0].id} and organization_id = ${input.orgId}`;
+    const rows = await tx<{ id: string }>`update invoices set status = ${"void"}
+      where id = ${invoice[0].id} and organization_id = ${input.orgId} and status in (${"draft"}, ${"issued"}) returning id`;
+    if (!rows[0]) throw new CompanyError("That invoice is not open in this company.");
+    if (invoice[0].status === "issued") {
+      const total = num(invoice[0].amount_cents);
+      const allocated = num(applied[0]?.total);
+      const open = total - allocated;
+      if (open < 0) throw new CompanyError("That invoice is allocated past its total. Nothing was voided.");
+      const lines = invoice[0].direction === "payable"
+        ? [
+            ...(open > 0 ? [{ code: "2100", debitCents: open, creditCents: 0 }] : []),
+            ...(allocated > 0 ? [{ code: "5300", debitCents: allocated, creditCents: 0 }] : []),
+            { code: "5100", debitCents: 0, creditCents: total },
+          ]
+        : [
+            { code: "4100", debitCents: total, creditCents: 0 },
+            ...(open > 0 ? [{ code: "1200", debitCents: 0, creditCents: open }] : []),
+            ...(allocated > 0 ? [{ code: "1300", debitCents: 0, creditCents: allocated }] : []),
+          ];
+      await postBalancedEntry(tx, {
+        orgId: input.orgId, actorId: input.actorId, sourceType: "invoice.void", sourceId: rows[0].id, lines,
+      });
+    }
+    await audit(tx, input.orgId, input.actorId, "invoice.void", rows[0].id, "Voided. The row stays. Payments were not deleted.");
+  });
 }
 
 export async function allocatePayment(sql: Sql, input: {
@@ -444,17 +585,26 @@ export async function allocatePayment(sql: Sql, input: {
     }
     const usedInvoice = await tx<{ total: unknown }>`select coalesce(sum(amount_cents), 0)::int as total from invoice_allocations
       where invoice_id = ${invoice[0].id}`;
-    const usedPayment = await tx<{ total: unknown }>`select coalesce(sum(amount_cents), 0)::int as total from invoice_allocations
-      where payment_id = ${payment[0].id}`;
+    const usedPayment = await tx<{ total: unknown }>`select coalesce(sum(a.amount_cents), 0)::int as total
+      from invoice_allocations a
+      join invoices i on i.id = a.invoice_id and i.organization_id = a.organization_id
+      where a.payment_id = ${payment[0].id} and a.organization_id = ${input.orgId} and i.status <> ${"void"}`;
     if (num(usedInvoice[0]?.total) + cents > num(invoice[0].amount_cents)) throw new CompanyError("That is more than the invoice still records.");
     if (num(usedPayment[0]?.total) + cents > num(payment[0].amount_cents)) throw new CompanyError("That is more than the payment still unallocated.");
+    const allocationId = nid("alc");
     try {
       await tx`insert into invoice_allocations (id, organization_id, invoice_id, payment_id, amount_cents, created_by)
-        values (${nid("alc")}, ${input.orgId}, ${invoice[0].id}, ${payment[0].id}, ${cents}, ${input.actorId})`;
+        values (${allocationId}, ${input.orgId}, ${invoice[0].id}, ${payment[0].id}, ${cents}, ${input.actorId})`;
     } catch (error) {
       if (isUnique(error)) throw new CompanyError("That payment is already allocated to this invoice. Nothing was added.");
       throw error;
     }
+    const lines = invoice[0].direction === "payable"
+      ? [{ code: "2100", debitCents: cents, creditCents: 0 }, { code: "5300", debitCents: 0, creditCents: cents }]
+      : [{ code: "1300", debitCents: cents, creditCents: 0 }, { code: "1200", debitCents: 0, creditCents: cents }];
+    await postBalancedEntry(tx, {
+      orgId: input.orgId, actorId: input.actorId, sourceType: "invoice.allocated", sourceId: allocationId, lines,
+    });
   });
 }
 
@@ -579,33 +729,48 @@ export async function linkOrderMission(sql: Sql, input: { orgId: string; actorId
 export async function invoiceOrder(sql: Sql, input: { orgId: string; actorId: string; orderId: string }): Promise<string> {
   refuseAgent(input.actorId, "invoice an order");
   if (!sql.transaction) throw new CompanyError("The books lock is unavailable. No invoice was issued.");
-  return sql.transaction(async (tx) => {
-    const order = await tx<{ id: string; party_id: string; status: string; note: string }>`select id, party_id, status, note from orders
-      where id = ${input.orderId} and organization_id = ${input.orgId} for update`;
-    if (!order[0] || (order[0].status !== "accepted" && order[0].status !== "fulfilled")) {
-      throw new CompanyError("Only an accepted order in this company can be invoiced.");
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      return await sql.transaction(async (tx) => {
+        const order = await tx<{ id: string; party_id: string; status: string; note: string }>`select id, party_id, status, note from orders
+          where id = ${input.orderId} and organization_id = ${input.orgId} for update`;
+        if (!order[0] || (order[0].status !== "accepted" && order[0].status !== "fulfilled")) {
+          throw new CompanyError("Only an accepted order in this company can be invoiced.");
+        }
+        const existing = await tx<{ id: string }>`select id from invoices
+          where organization_id = ${input.orgId} and order_id = ${order[0].id} and status <> ${"void"} limit 1`;
+        if (existing[0]) throw new CompanyError("That order already has an invoice.");
+        const lines = await tx<{ description: string; amount_cents: unknown }>`select description, amount_cents from order_lines
+          where order_id = ${order[0].id} and organization_id = ${input.orgId}`;
+        const total = lines.reduce((sum, line) => sum + num(line.amount_cents), 0);
+        if (total < 1) throw new CompanyError("That order has no amount to invoice.");
+        const number = await nextInvoiceNumber(tx, input.orgId);
+        const invoiceId = nid("inv");
+        const title = order[0].note.trim() || "Order";
+        await tx`insert into invoices (id, organization_id, direction, party_id, title, amount_cents, status, created_by, order_id, number)
+          values (${invoiceId}, ${input.orgId}, ${"receivable"}, ${order[0].party_id}, ${title}, ${total}, ${"issued"}, ${input.actorId}, ${order[0].id}, ${number})`;
+        for (const line of lines) {
+          await tx`insert into invoice_lines (id, organization_id, invoice_id, description, amount_cents)
+            values (${nid("iln")}, ${input.orgId}, ${invoiceId}, ${line.description}, ${num(line.amount_cents)})`;
+        }
+        await postBalancedEntry(tx, {
+          orgId: input.orgId,
+          actorId: input.actorId,
+          sourceType: "invoice.issued",
+          sourceId: invoiceId,
+          lines: [{ code: "1200", debitCents: total, creditCents: 0 }, { code: "4100", debitCents: 0, creditCents: total }],
+        });
+        await audit(tx, input.orgId, input.actorId, "invoice.issued", invoiceId, `${number} issued from an order. No payment was created.`);
+        return invoiceId;
+      });
+    } catch (error) {
+      if (error instanceof CompanyError) throw error;
+      if (isOpenOrderCollision(error)) throw new CompanyError("That order already has an invoice.");
+      if (isNumberCollision(error) && attempt < 2) continue;
+      throw error;
     }
-    const existing = await tx<{ id: string }>`select id from invoices
-      where organization_id = ${input.orgId} and order_id = ${order[0].id} and status <> ${"void"} limit 1`;
-    if (existing[0]) throw new CompanyError("That order already has an invoice.");
-    const lines = await tx<{ description: string; amount_cents: unknown }>`select description, amount_cents from order_lines
-      where order_id = ${order[0].id} and organization_id = ${input.orgId}`;
-    const total = lines.reduce((sum, line) => sum + num(line.amount_cents), 0);
-    if (total < 1) throw new CompanyError("That order has no amount to invoice.");
-    const seq = await tx<{ n: unknown }>`select coalesce(max(substring(number from 5)::int), 0)::int as n from invoices
-      where organization_id = ${input.orgId} and number like ${"INV-%"}`;
-    const number = `INV-${String(num(seq[0]?.n) + 1).padStart(4, "0")}`;
-    const invoiceId = nid("inv");
-    const title = order[0].note.trim() || "Order";
-    await tx`insert into invoices (id, organization_id, direction, party_id, title, amount_cents, status, created_by, order_id, number)
-      values (${invoiceId}, ${input.orgId}, ${"receivable"}, ${order[0].party_id}, ${title}, ${total}, ${"issued"}, ${input.actorId}, ${order[0].id}, ${number})`;
-    for (const line of lines) {
-      await tx`insert into invoice_lines (id, organization_id, invoice_id, description, amount_cents)
-        values (${nid("iln")}, ${input.orgId}, ${invoiceId}, ${line.description}, ${num(line.amount_cents)})`;
-    }
-    await audit(tx, input.orgId, input.actorId, "invoice.issued", invoiceId, `${number} issued from an order. No payment was created.`);
-    return invoiceId;
-  });
+  }
+  throw new CompanyError("Could not assign an invoice number. Nothing was issued.");
 }
 
 export async function addBrief(sql: Sql, input: {
@@ -782,6 +947,23 @@ async function statement(sql: Sql, orgId: string, burn: number | null): Promise<
   const spent = num(cash[0]?.spent);
   const margin = received - spent;
   const runway = burn && burn > 0 ? Math.floor(margin / burn) : null;
+  const gap = await sql<{ n: unknown }>`select count(*)::int as n from invoices i
+    where i.organization_id = ${orgId}
+      and (i.status = ${"issued"} or (i.status = ${"void"} and i.number is not null))
+      and not exists (
+        select 1 from journal_entries e
+        where e.organization_id = i.organization_id and e.source_type = ${"invoice.issued"} and e.source_id = i.id
+      )`;
+  const balances = await sql<{ code: string; net: unknown }>`select a.code,
+      coalesce(sum(l.debit_cents - l.credit_cents), 0)::int as net
+    from ledger_accounts a
+    left join journal_lines l on l.account_id = a.id and l.organization_id = a.organization_id
+    where a.organization_id = ${orgId} and a.code in (${"1200"}, ${"2100"})
+    group by a.code`;
+  const postedGap = num(gap[0]?.n) > 0;
+  const net = new Map(balances.map((row) => [row.code, num(row.net)]));
+  const claims = net.get("1200") ?? 0;
+  const obligations = -(net.get("2100") ?? 0);
   return {
     receivedCents: received,
     spentCents: spent,
@@ -792,7 +974,9 @@ async function statement(sql: Sql, orgId: string, burn: number | null): Promise<
     fundingMarkedReceivedCents: num(capital[0]?.marked),
     receivableCents: receivable,
     payableCents: payable,
-    note: "Recorded margin is receipts minus expenditures. It is not a bank balance, not profit, and not a tax return. Funding marked received is not cash until you record a receipt.",
+    journalClaimsCents: postedGap ? null : (claims === 0 ? 0 : claims),
+    journalObligationsCents: postedGap ? null : (obligations === 0 ? 0 : obligations),
+    note: "Recorded margin is receipts minus expenditures. It is not a bank balance, not profit, and not a tax return. Funding marked received is not cash until you record a receipt. Posted claims are journal balances, not cash. If a posting is missing, that figure is unavailable instead of zero.",
   };
 }
 
@@ -841,7 +1025,9 @@ export async function loadBusiness(sql: Sql, orgId: string): Promise<BusinessVie
     where i.organization_id = ${orgId} order by i.created_at desc`;
   const paymentRows = await sql<{ id: string; payer: string; direction: string; amount_cents: unknown; allocated: unknown }>`
     select p.id, p.payer, p.direction, p.amount_cents,
-      coalesce((select sum(amount_cents) from invoice_allocations a where a.payment_id = p.id), 0)::int as allocated
+      coalesce((select sum(a.amount_cents) from invoice_allocations a
+        join invoices vi on vi.id = a.invoice_id and vi.organization_id = a.organization_id
+        where a.payment_id = p.id and vi.status <> 'void'), 0)::int as allocated
     from payments p where p.organization_id = ${orgId} and p.voided_at is null order by p.created_at desc limit 40`;
   const briefs = await sql<{ id: string; offer_id: string | null; offer_name: string | null; problem: string; requirements: string; value_proposition: string; cost_cents: unknown; feedback: string }>`
     select b.id, b.offer_id, o.name as offer_name, b.problem, b.requirements, b.value_proposition, b.cost_cents, b.feedback
@@ -882,6 +1068,23 @@ export async function loadBusiness(sql: Sql, orgId: string): Promise<BusinessVie
     select order_id, mission_id from order_mission_links where organization_id = ${orgId}`;
   const missions = await sql<{ id: string; title: string; status: string }>`
     select id, title, status from missions where organization_id = ${orgId} order by updated_at desc limit 40`;
+  const postedRows = await sql<{ source_id: string }>`select source_id from journal_entries
+    where organization_id = ${orgId} and source_type = ${"invoice.issued"}`;
+  const postedIds = new Set(postedRows.map((row) => row.source_id));
+  const journalRows = await sql<{ id: string; source_type: string; source_id: string; code: string; name: string; debit_cents: unknown; credit_cents: unknown }>`
+    select e.id, e.source_type, e.source_id, a.code, a.name, l.debit_cents, l.credit_cents
+    from journal_entries e
+    join journal_lines l on l.entry_id = e.id and l.organization_id = e.organization_id
+    join ledger_accounts a on a.id = l.account_id and a.organization_id = e.organization_id
+    where e.organization_id = ${orgId}
+    order by e.posted_at, a.code`;
+  const journal: BusinessView["journal"] = [];
+  for (const row of journalRows) {
+    const line = { code: row.code, name: row.name, debitCents: num(row.debit_cents), creditCents: num(row.credit_cents) };
+    const current = journal[journal.length - 1];
+    if (!current || current.id !== row.id) journal.push({ id: row.id, sourceType: row.source_type, sourceId: row.source_id, lines: [line] });
+    else current.lines.push(line);
+  }
   return {
     venture,
     obligations: obligations.map((row) => ({
@@ -897,11 +1100,12 @@ export async function loadBusiness(sql: Sql, orgId: string): Promise<BusinessVie
     invoices: invoiceRows.map((row) => ({
       id: row.id, direction: row.direction, partyId: row.party_id, partyName: row.party_name ?? "",
       title: row.title, amountCents: num(row.amount_cents), status: row.status, allocatedCents: num(row.allocated),
-      number: row.number, orderId: row.order_id,
+      number: row.number, orderId: row.order_id, posted: postedIds.has(row.id),
     })),
     payments: paymentRows.map((row) => ({
       id: row.id, payer: row.payer, direction: row.direction, amountCents: num(row.amount_cents), allocatedCents: num(row.allocated),
     })),
+    journal,
     briefs: briefs.map((row) => ({
       id: row.id, offerId: row.offer_id, offerName: row.offer_name ?? "", problem: row.problem,
       requirements: row.requirements, valueProposition: row.value_proposition,
