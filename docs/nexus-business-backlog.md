@@ -23,7 +23,7 @@ A row is not done because a table or screen exists. It is done when the workflow
 | Integration registry, sealed secrets, GitHub read-only | Tested | `integrations`, `integration_secrets`, `github_*` | GitHub is not authenticated. Writes stay refused |
 | Cross-organization lease denial | Tested | lease test with `org_a` and `org_b` | Not a multi-business product |
 | Projects, tasks, task runs, approvals | Implemented | `0002_nexus.sql` | Not connected to missions. Do not sync them silently |
-| Customers, catalog, orders, invoices, journal, employees, suppliers, tickets | Partial | Parties, offers, quotes, orders, invoices, and the business record are tested. A general journal is not. | Build them on the objects below |
+| Customers, catalog, orders, invoices, journal, employees, suppliers, tickets | Partial | Parties, offers, quotes, orders, invoices, the business record, and the control loop are tested. A general journal is not. | Build them on the objects below |
 
 `npm test` runs the NEXUS suite, the app suite, and the workspace suite, and exits non-zero if any of them fail. On this tree it exits 0. `npm run build` exits 0. That build is not a deployment. A missing auth flag still means sign-in is on. The share title for this workspace is `ADL NEXUS`.
 
@@ -251,6 +251,38 @@ Acceptance:
 - Re-running the post for the same source does not create a second entry.
 - An agent cannot post.
 - A manual journal line from the client is rejected.
+
+
+### Organizational control loop
+
+Status: Tested on this tree. Not a second mission lifecycle, and not unsupervised execution.
+
+Depends on: M1, M5, M6.
+
+Database: `control_policies`, `control_cycles`, `control_events`, `control_decisions`. One policy row per company for `work.propose`. Levels are 0 manual, 1 assisted, and 2 delegated. The default is assisted. A stop flag is separate from the level. Events and decisions cannot be updated or deleted.
+
+What a cycle does:
+
+- Reads open obligations with no mission, accepted orders with no mission link, and issued invoices that are not fully allocated.
+- Writes one immutable event per idempotency key. A second cycle does not decide that event again.
+- Assisted and manual leave a notice. Delegated calls the existing staffing path, which opens a `PROPOSED` mission. That mission is not authorized.
+- Restricted obligations, unlinked orders, and open claims are notices at every level, including delegated.
+- A notice taken while assisted does not block a later delegation. Delegation uses its own key and can still propose.
+- Stop records notices and opens nothing, even at delegated. Resume does not authorize the missions it later proposes.
+- Opening the command page does not run a cycle.
+
+What it does not do: levels 3 or 4, learning, a dependency graph, a second workflow engine, filing, payments, bank movement, publication, contract signing, payroll, or a change to security permissions. The existing scheduler pause and stop are unchanged.
+
+Acceptance:
+
+- An agent cannot run the loop or change its policy.
+- A non-owner cannot run it.
+- Assisted and manual cycles create no missions.
+- A restricted obligation never receives a mission.
+- Delegated missions stay `PROPOSED`. The ceiling, payments, order links, and invoice count do not change.
+- A second cycle does not add a duplicate decision or mission.
+- Another company cannot see the events or decisions.
+- Control events and decisions cannot be updated or deleted.
 
 ### M8 — Support
 

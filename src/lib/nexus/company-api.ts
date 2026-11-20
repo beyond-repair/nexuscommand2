@@ -66,6 +66,7 @@ import {
   requireOwnerScope,
 } from "./company-store";
 import { loadBusiness } from "./venture";
+import { runControlCycle, setControlHalt, setControlPolicy } from "./control-loop";
 import { assertCommandRate } from "./command-rate";
 import { schedulerTick } from "./scheduler";
 
@@ -439,6 +440,21 @@ export const companyCommand = createServerFn({ method: "POST" })
     }
     if (data.type === "unlink-task") {
       await unlinkMissionTask(sql, context.userId, missionId, data.note ?? "");
+      return { ok: true as const };
+    }
+    if (data.type === "control-cycle") {
+      const scope = await requireOwnerScope(sql, context.userId);
+      return runControlCycle(sql, { orgId: scope.orgId, actorId: context.userId });
+    }
+    if (data.type === "control-policy") {
+      const scope = await requireOwnerScope(sql, context.userId);
+      await setControlPolicy(sql, { orgId: scope.orgId, actorId: context.userId, level: data.kind ?? "" });
+      return { ok: true as const };
+    }
+    if (data.type === "control-halt") {
+      const scope = await requireOwnerScope(sql, context.userId);
+      if (data.kind !== "stop" && data.kind !== "resume") throw new Error("Choose stop or resume.");
+      await setControlHalt(sql, { orgId: scope.orgId, actorId: context.userId, halted: data.kind === "stop" });
       return { ok: true as const };
     }
     throw new Error("Unknown command");
