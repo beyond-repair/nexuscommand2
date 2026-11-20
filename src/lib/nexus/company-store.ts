@@ -74,6 +74,7 @@ import {
   type UnknownCostPolicy,
 } from "./world.ts";
 import { ventureSummary } from "./venture.ts";
+import { loadControl, type ControlSnapshot } from "./control-loop.ts";
 import {
   addContact,
   archiveParty,
@@ -177,6 +178,7 @@ export type CommandCenter = {
     openObligations: number;
     restrictedOpen: number;
   };
+  control: ControlSnapshot;
   providers: Array<{
     provider: string;
     model: string;
@@ -457,6 +459,7 @@ export async function commandCenter(sql: Sql, userId: string): Promise<CommandCe
     changes: await recentChanges(sql, ws.orgId),
     finance: await financeSnapshot(sql, ws.orgId),
     business: await ventureSummary(sql, ws.orgId),
+    control: await loadControl(sql, ws.orgId),
     providers: await providerSnapshot(sql, ws.orgId),
     world: await worldSnapshot(sql, ws.orgId),
   };

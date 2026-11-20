@@ -172,6 +172,7 @@ function Command() {
   const [objective, setObjective] = useState("");
   const [busy, setBusy] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const [loopError, setLoopError] = useState<string | null>(null);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -184,6 +185,19 @@ function Command() {
       }
     } catch (err) {
       setFormError(errorText(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function control(type: string, extra: { kind?: string } = {}) {
+    setBusy(true);
+    setLoopError(null);
+    try {
+      await companyCommand({ data: { type, ...extra } });
+      reload();
+    } catch (err) {
+      setLoopError(errorText(err));
     } finally {
       setBusy(false);
     }
@@ -227,6 +241,48 @@ function Command() {
               ? `${data.business.name} is in ${data.business.stage}. ${data.business.openObligations} obligations are still open. ${data.business.restrictedOpen} must be done by a person, not an agent.`
               : "No business record yet. Opening one coordinates formation, money, product, market, operations, and people. It does not create a second company."}
           </p>
+        </section>
+        <section className="mt-4 border border-line bg-surface px-4 py-4">
+          <div className="flex items-baseline justify-between gap-3">
+            <h2 className="text-sm font-medium">Control loop</h2>
+            <span className="font-mono text-xs text-muted">
+              {data.control.halted ? "Stopped" : "Running"} · {data.control.prepareLevel === 0 ? "Manual" : data.control.prepareLevel === 2 ? "Delegated" : "Assisted"}
+            </span>
+          </div>
+          <p className="mt-2 text-sm text-muted">
+            It reads open obligations, accepted orders, and unpaid claims. A notice is not execution. Delegated may open a proposed mission for research work only. That mission is not authorized. The loop does not file, spend, publish, sign, or change who is allowed to do what. Restricted work stays with you.
+          </p>
+          {data.control.lastCycle ? (
+            <p className="mt-2 font-mono text-xs text-muted tabular-nums">
+              Last cycle noticed {data.control.lastCycle.observed}, decided {data.control.lastCycle.decided}, proposed {data.control.lastCycle.proposed}.
+            </p>
+          ) : (
+            <p className="mt-2 text-sm text-muted">No cycle has run. Opening this page does not start one.</p>
+          )}
+          {loopError ? <div className="mt-2"><Alert>{loopError}</Alert></div> : null}
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Button type="button" disabled={busy || data.organization.role !== "owner"} onClick={() => void control("control-cycle")}>Run cycle</Button>
+            <Button type="button" variant="quiet" disabled={busy || data.organization.role !== "owner" || data.control.prepareLevel === 0} onClick={() => void control("control-policy", { kind: "0" })}>Manual</Button>
+            <Button type="button" variant="quiet" disabled={busy || data.organization.role !== "owner" || data.control.prepareLevel === 1} onClick={() => void control("control-policy", { kind: "1" })}>Assisted</Button>
+            <Button type="button" variant="quiet" disabled={busy || data.organization.role !== "owner" || data.control.prepareLevel === 2} onClick={() => void control("control-policy", { kind: "2" })}>Delegated</Button>
+            <Button type="button" variant="danger" disabled={busy || data.organization.role !== "owner" || data.control.halted} onClick={() => void control("control-halt", { kind: "stop" })}>Stop the loop</Button>
+            <Button type="button" variant="quiet" disabled={busy || data.organization.role !== "owner" || !data.control.halted} onClick={() => void control("control-halt", { kind: "resume" })}>Resume</Button>
+          </div>
+          {data.control.decisions.length === 0 ? (
+            <p className="mt-3 text-sm text-muted">No decision is on record.</p>
+          ) : (
+            <ul className="mt-3 space-y-3">
+              {data.control.decisions.map((decision) => (
+                <li key={decision.id} className="border-t border-line pt-3">
+                  <p className="text-sm">{decision.summary}</p>
+                  <p className="mt-1 text-sm text-muted">{decision.reason}</p>
+                  <p className="mt-1 font-mono text-xs text-muted">
+                    {decision.disposition === "proposed" ? "Proposed mission" : "Notice"} · still needs you
+                  </p>
+                </li>
+              ))}
+            </ul>
+          )}
         </section>
 
         <form onSubmit={(event) => void submit(event)} className="mt-8">
