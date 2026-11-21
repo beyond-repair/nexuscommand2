@@ -1,5 +1,6 @@
 import { CompanyError } from "./company.ts";
 import type { Sql } from "./company-store.ts";
+import { evaluateDependencies, syncDependencyFindings, type PlanItem } from "./dependencies.ts";
 import { staffObligation } from "./venture.ts";
 
 const PROPOSE = "work.propose";
@@ -28,6 +29,7 @@ type Observation = {
   key: string;
   obligationId?: string;
   delegable: boolean;
+  hold?: PlanItem;
 };
 
 function nid(prefix: string): string {
@@ -166,7 +168,25 @@ export async function runControlCycle(sql: Sql, input: { orgId: string; actorId:
     await tx`select id from organizations where id = ${input.orgId} for update`;
     const policy = await policyOf(tx, input.orgId);
     const delegate = policy.level === 2 && !policy.halted;
+    const plan = await evaluateDependencies(tx, input.orgId);
+    await syncDependencyFindings(tx, input.orgId, input.actorId, plan);
+    const held = new Map<string, PlanItem>();
+    for (const item of plan.items) {
+      if (item.recordType !== "obligation") continue;
+      if (item.status === "blocked" || item.status === "missing" || item.status === "approval" || item.status === "circular") {
+        held.set(item.recordId, item);
+      }
+    }
     const observations = await observe(tx, input.orgId, delegate);
+    for (const item of observations) {
+      const hold = item.delegable && item.obligationId ? held.get(item.obligationId) : undefined;
+      if (!hold || policy.halted) continue;
+      item.key = `work.hold:${item.obligationId}:${hold.status}`;
+      item.eventType = "dependency.held";
+      item.operation = "dependency.held";
+      item.delegable = false;
+      item.hold = hold;
+    }
     const cycleId = nid("cyc");
     let decided = 0;
     let proposed = 0;
@@ -193,6 +213,8 @@ export async function runControlCycle(sql: Sql, input: { orgId: string; actorId:
         disposition = "proposed";
         reason = "A proposed mission was opened. It is not authorized to execute.";
         proposed += 1;
+      } else if (item.hold) {
+        reason = `${item.hold.summary} ${item.hold.evidence} No mission was opened.`.slice(0, 500);
       } else if (policy.halted && item.delegable) {
         reason = "The loop is stopped. No mission was opened. Resume it only if you want a proposal. A proposal is still not authorization.";
       } else if (item.operation === "obligation.restricted") {

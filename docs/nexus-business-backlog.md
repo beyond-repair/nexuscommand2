@@ -271,7 +271,7 @@ What a cycle does:
 - Stop records notices and opens nothing, even at delegated. Resume does not authorize the missions it later proposes.
 - Opening the command page does not run a cycle.
 
-What it does not do: levels 3 or 4, learning, a dependency graph, a second workflow engine, filing, payments, bank movement, publication, contract signing, payroll, or a change to security permissions. The existing scheduler pause and stop are unchanged.
+What it does not do: levels 3 or 4, learning, a knowledge graph, a second workflow engine, filing, payments, bank movement, publication, contract signing, payroll, or a change to security permissions. The existing scheduler pause and stop are unchanged.
 
 Acceptance:
 
@@ -283,6 +283,20 @@ Acceptance:
 - A second cycle does not add a duplicate decision or mission.
 - Another company cannot see the events or decisions.
 - Control events and decisions cannot be updated or deleted.
+
+### Dependency awareness
+
+Status: Tested on this tree. Not execution authority.
+
+Depends on: the organizational control loop.
+
+Database: `organizational_relationships`, `dependency_findings`. A relationship is `depends_on`, `blocks`, `requires_approval`, `owned_by`, `assigned_to`, `produces`, `satisfies`, `derived_from`, or `related_to`. Both records must already belong to the same company. An active duplicate is rejected. A record cannot relate to itself. Retirement keeps the row. Deleting a relationship or a finding is rejected.
+
+Blocking edges are `depends_on` and `blocks`. Completion is the stored state: an obligation is complete only when satisfied or waived, a mission only when accepted, a task only when completed, an order only when fulfilled, and an issued invoice only when nothing remains open. A proposed mission is not complete. There is no reliable deadline column, so nothing is marked overdue.
+
+A cycle reads that graph. Blocked, missing, circular, and approval-waiting research is not proposed. Delegated mode may still open a proposed mission for research that is free to start. The mission is not authorized. Restricted work stays out. Opening the page computes the reading and does not write findings. A cycle writes findings. A cleared finding is retired, not deleted.
+
+What it does not do: schedule itself, authorize launch, move money, accept an order, issue an invoice, or let an agent add or retire a relationship.
 
 ### M8 — Support
 

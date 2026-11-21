@@ -173,6 +173,9 @@ function Command() {
   const [busy, setBusy] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [loopError, setLoopError] = useState<string | null>(null);
+  const [relation, setRelation] = useState("depends_on");
+  const [sourceRef, setSourceRef] = useState("");
+  const [targetRef, setTargetRef] = useState("");
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -190,7 +193,7 @@ function Command() {
     }
   }
 
-  async function control(type: string, extra: { kind?: string } = {}) {
+  async function control(type: string, extra: { kind?: string; note?: string; objective?: string; label?: string; value?: string; name?: string } = {}) {
     setBusy(true);
     setLoopError(null);
     try {
@@ -250,7 +253,7 @@ function Command() {
             </span>
           </div>
           <p className="mt-2 text-sm text-muted">
-            It reads open obligations, accepted orders, and unpaid claims. A notice is not execution. Delegated may open a proposed mission for research work only. That mission is not authorized. The loop does not file, spend, publish, sign, or change who is allowed to do what. Restricted work stays with you.
+            It reads open obligations, accepted orders, unpaid claims, and dependencies. A notice is not execution. Blocked, circular, missing, or approval-waiting work is not proposed. Delegated may open a proposed mission for research work that is free to start. That mission is not authorized. The loop does not file, spend, publish, sign, or change who is allowed to do what. Restricted work stays with you.
           </p>
           {data.control.lastCycle ? (
             <p className="mt-2 font-mono text-xs text-muted tabular-nums">
@@ -284,6 +287,29 @@ function Command() {
             </ul>
           )}
         </section>
+        <DependencyPanel
+          plan={data.plan}
+          owner={data.organization.role === "owner"}
+          busy={busy}
+          relation={relation}
+          sourceRef={sourceRef}
+          targetRef={targetRef}
+          onRelation={setRelation}
+          onSource={setSourceRef}
+          onTarget={setTargetRef}
+          onAdd={() => {
+            const source = sourceRef.split(":");
+            const target = targetRef.split(":");
+            void control("dependency-add", {
+              kind: relation,
+              note: source[0] ?? "",
+              objective: source.slice(1).join(":"),
+              label: target[0] ?? "",
+              value: target.slice(1).join(":"),
+            });
+          }}
+          onRetire={(id) => void control("dependency-retire", { note: id })}
+        />
 
         <form onSubmit={(event) => void submit(event)} className="mt-8">
           <label htmlFor="mission" className="text-sm font-medium">
@@ -532,4 +558,137 @@ function Command() {
 function Status({ status }: { status: MissionStatus }) {
   const tone = status === "REJECTED" || status === "CANCELLED" ? "text-danger" : status === "AWAITING_ACCEPTANCE" || status === "ACCEPTED" ? "text-accent" : "text-muted";
   return <span className={`shrink-0 font-mono text-xs ${tone}`}>{MISSION_LABEL[status]}</span>;
+}
+
+const RELATION_LABEL: Record<string, string> = {
+  depends_on: "Depends on",
+  blocks: "Blocks",
+  requires_approval: "Requires approval from",
+  owned_by: "Owned by",
+  assigned_to: "Assigned to",
+  produces: "Produces",
+  satisfies: "Satisfies",
+  derived_from: "Derived from",
+  related_to: "Related to",
+};
+
+const PLAN_LABEL: Record<string, string> = {
+  ready: "Ready",
+  blocked: "Blocked",
+  missing: "Missing prerequisite",
+  approval: "Waiting for human approval",
+  circular: "Circular dependency",
+  unassigned: "Ownership gap",
+  proposed: "Proposed",
+  completed: "Completed",
+};
+
+function DependencyPanel({
+  plan,
+  owner,
+  busy,
+  relation,
+  sourceRef,
+  targetRef,
+  onRelation,
+  onSource,
+  onTarget,
+  onAdd,
+  onRetire,
+}: {
+  plan: CommandCenter["plan"];
+  owner: boolean;
+  busy: boolean;
+  relation: string;
+  sourceRef: string;
+  targetRef: string;
+  onRelation: (value: string) => void;
+  onSource: (value: string) => void;
+  onTarget: (value: string) => void;
+  onAdd: () => void;
+  onRetire: (id: string) => void;
+}) {
+  const problems = plan.items.filter((item) => item.status === "blocked" || item.status === "missing" || item.status === "approval" || item.status === "circular");
+  const gaps = plan.items.filter((item) => item.status === "unassigned");
+  const active = plan.relationships.filter((item) => item.state === "active");
+  const tally = (status: string) => plan.items.filter((item) => item.status === status).length;
+  const statusOf = new Map(plan.items.map((item) => [`${item.recordType}:${item.recordId}`, item.status]));
+  const reading = [
+    ["ready", "Ready"],
+    ["blocked", "Blocked"],
+    ["approval", "Waiting for human approval"],
+    ["missing", "Missing prerequisite"],
+    ["proposed", "Proposed"],
+    ["completed", "Completed"],
+    ["circular", "Circular dependency"],
+    ["unassigned", "Ownership gap"],
+  ].map(([status, label]) => `${label} ${tally(status)}`).join(" · ");
+  return (
+    <section className="mt-4 border border-line bg-surface px-4 py-4">
+      <h2 className="text-sm font-medium">Dependencies</h2>
+      <p className="mt-2 text-sm text-muted">
+        This is the current reading of records you already have. Opening the page does not run a cycle and does not authorize anything. {plan.deadlineNote}
+      </p>
+      <p className="mt-2 font-mono text-xs text-muted">{reading}</p>
+      {plan.sequence.length === 0 ? (
+        <p className="mt-3 text-sm text-muted">No remaining work is free of a cycle.</p>
+      ) : (
+        <ol className="mt-3 space-y-2">
+          {plan.sequence.slice(0, 8).map((step, index) => (
+            <li key={`${step.recordType}:${step.recordId}`} className="text-sm">
+              <span className="font-mono text-xs text-muted tabular-nums">{index + 1} </span>
+              {step.label}
+              <span className="mt-0.5 block font-mono text-xs text-muted">{PLAN_LABEL[statusOf.get(`${step.recordType}:${step.recordId}`) ?? ""] ?? "Reading"}</span>
+              <span className="mt-0.5 block text-sm text-muted">{step.because}</span>
+            </li>
+          ))}
+        </ol>
+      )}
+      {problems.length === 0 ? (
+        <p className="mt-3 text-sm text-muted">Nothing in this reading is blocked, circular, missing, or waiting for approval.</p>
+      ) : (
+        <ul className="mt-3 space-y-3">
+          {problems.slice(0, 8).map((item) => (
+            <li key={`${item.status}:${item.recordType}:${item.recordId}`} className="border-t border-line pt-3">
+              <p className="text-sm">{item.label}</p>
+              <p className="mt-1 font-mono text-xs text-muted">{PLAN_LABEL[item.status] ?? item.status}</p>
+              <p className="mt-1 text-sm text-muted">{item.evidence}</p>
+            </li>
+          ))}
+        </ul>
+      )}
+      <p className="mt-3 text-sm text-muted">
+        {gaps.length === 0
+          ? "No ownership gap is on this reading."
+          : `${gaps.length} open ${gaps.length === 1 ? "record has" : "records have"} no owner or assignee on a relationship. No owner was invented.`}
+      </p>
+      {active.length === 0 ? (
+        <p className="mt-3 text-sm text-muted">No active relationship. A blank list is not a claim that nothing depends on anything.</p>
+      ) : (
+        <ul className="mt-3 space-y-3">
+          {active.map((item) => (
+            <li key={item.id} className="border-t border-line pt-3">
+              <p className="text-sm">{item.sourceLabel} · {RELATION_LABEL[item.relation] ?? item.relation} · {item.targetLabel}</p>
+              <button type="button" className="mt-1 inline-flex h-11 items-center text-sm text-accent disabled:opacity-40" disabled={busy || !owner} onClick={() => onRetire(item.id)}>Retire</button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {plan.retired > 0 ? <p className="mt-2 text-sm text-muted">{plan.retired} retired. Those rows stay.</p> : null}
+      <div className="mt-4 grid gap-2">
+        <select value={relation} onChange={(event) => onRelation(event.target.value)} className={`${controlClass} h-11`} disabled={!owner}>
+          {Object.entries(RELATION_LABEL).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+        </select>
+        <select value={sourceRef} onChange={(event) => onSource(event.target.value)} className={`${controlClass} h-11`} disabled={!owner}>
+          <option value="">From</option>
+          {plan.records.map((record) => <option key={`s:${record.type}:${record.id}`} value={`${record.type}:${record.id}`}>{record.label}</option>)}
+        </select>
+        <select value={targetRef} onChange={(event) => onTarget(event.target.value)} className={`${controlClass} h-11`} disabled={!owner}>
+          <option value="">To</option>
+          {plan.records.map((record) => <option key={`t:${record.type}:${record.id}`} value={`${record.type}:${record.id}`}>{record.label}</option>)}
+        </select>
+        <Button type="button" variant="quiet" disabled={busy || !owner || !sourceRef || !targetRef || sourceRef === targetRef} onClick={onAdd}>Add relationship</Button>
+      </div>
+    </section>
+  );
 }

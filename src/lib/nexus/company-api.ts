@@ -67,6 +67,7 @@ import {
 } from "./company-store";
 import { loadBusiness } from "./venture";
 import { runControlCycle, setControlHalt, setControlPolicy } from "./control-loop";
+import { addRelationship, retireRelationship } from "./dependencies";
 import { assertCommandRate } from "./command-rate";
 import { schedulerTick } from "./scheduler";
 
@@ -455,6 +456,25 @@ export const companyCommand = createServerFn({ method: "POST" })
       const scope = await requireOwnerScope(sql, context.userId);
       if (data.kind !== "stop" && data.kind !== "resume") throw new Error("Choose stop or resume.");
       await setControlHalt(sql, { orgId: scope.orgId, actorId: context.userId, halted: data.kind === "stop" });
+      return { ok: true as const };
+    }
+    if (data.type === "dependency-add") {
+      const scope = await requireOwnerScope(sql, context.userId);
+      await addRelationship(sql, {
+        orgId: scope.orgId,
+        actorId: context.userId,
+        relation: data.kind ?? "",
+        sourceType: data.note ?? "",
+        sourceId: data.objective ?? "",
+        targetType: data.label ?? "",
+        targetId: data.value ?? "",
+        metadata: data.name ?? "",
+      });
+      return { ok: true as const };
+    }
+    if (data.type === "dependency-retire") {
+      const scope = await requireOwnerScope(sql, context.userId);
+      await retireRelationship(sql, { orgId: scope.orgId, actorId: context.userId, relationshipId: data.note ?? "" });
       return { ok: true as const };
     }
     throw new Error("Unknown command");
