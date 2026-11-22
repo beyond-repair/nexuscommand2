@@ -312,6 +312,20 @@ A recommendation is do now, do next, prepare, await human approval, resolve bloc
 
 What it does not do: authorize a mission, clear a dependency, grant approval, reclassify restricted work, authorize launch, move money, issue an invoice, accept an order, or let an agent change the policy or an objective.
 
+### Schedule
+
+Status: Tested on this tree. A proposal about order, not permission to execute.
+
+Depends on: the control loop, dependency awareness, and priority.
+
+Database: `schedule_policies`, `schedule_plans`, `schedule_items`, `schedule_conflicts`, `schedule_events`. Policy version 1 is the only defined rule. A plan is proposed, accepted, superseded, or cancelled. The unsaved reading is a draft and is not a row. Windows cannot be stored. Duration and availability can only be the value unknown. Deleting schedule history is rejected.
+
+The order is the dependency sequence, then priority class, then title, then id. Blocked, missing, circular, approval-waiting, restricted, completed, and cancelled work are not executable slots. A proposed mission stays proposed. Already authorized work is not started by the schedule. A recorded assignee is eligible only inside this company. The same assignee is not placed twice, because duration is unknown and a second placement would be a double-booking. Membership alone is not eligibility. An agent title is not a capability.
+
+A cycle writes a proposed plan when the loop is not stopped. An unchanged fingerprint does not add another plan. Opening the page computes the reading and does not write. Only the owner can accept or cancel. Acceptance does not authorize a mission. The department scheduler is a separate control and is unchanged.
+
+What it does not do: authorize launch, move money, issue an invoice, accept an order, publish, file, sign, assign an agent to itself, or let an agent accept a schedule.
+
 ### M8 — Support
 
 Depends on: M3.
