@@ -176,6 +176,15 @@ function Command() {
   const [relation, setRelation] = useState("depends_on");
   const [sourceRef, setSourceRef] = useState("");
   const [targetRef, setTargetRef] = useState("");
+  const [classFilter, setClassFilter] = useState("all");
+  const [readyFilter, setReadyFilter] = useState("all");
+  const [typeFilter, setTypeFilter] = useState("all");
+  const [divisionFilter, setDivisionFilter] = useState("all");
+  const [ownerFilter, setOwnerFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [markLevel, setMarkLevel] = useState("critical");
+  const [markRef, setMarkRef] = useState("");
+  const [markReason, setMarkReason] = useState("");
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -253,7 +262,7 @@ function Command() {
             </span>
           </div>
           <p className="mt-2 text-sm text-muted">
-            It reads open obligations, accepted orders, unpaid claims, and dependencies. A notice is not execution. Blocked, circular, missing, or approval-waiting work is not proposed. Delegated may open a proposed mission for research work that is free to start. That mission is not authorized. The loop does not file, spend, publish, sign, or change who is allowed to do what. Restricted work stays with you.
+            It reads open obligations, accepted orders, unpaid claims, dependencies, and priority. A notice is not execution. Blocked, circular, missing, or approval-waiting work is not proposed. Priority does not clear a blocker, grant approval, reclassify restricted work, or authorize a mission. Delegated may open a proposed mission for research work that is free to start. That mission is not authorized. The loop does not file, spend, publish, sign, or change who is allowed to do what. Restricted work stays with you.
           </p>
           {data.control.lastCycle ? (
             <p className="mt-2 font-mono text-xs text-muted tabular-nums">
@@ -309,6 +318,40 @@ function Command() {
             });
           }}
           onRetire={(id) => void control("dependency-retire", { note: id })}
+        />
+        <PriorityPanel
+          priority={data.priority}
+          records={data.plan.records}
+          owner={data.organization.role === "owner"}
+          busy={busy}
+          classFilter={classFilter}
+          readyFilter={readyFilter}
+          typeFilter={typeFilter}
+          divisionFilter={divisionFilter}
+          ownerFilter={ownerFilter}
+          statusFilter={statusFilter}
+          markLevel={markLevel}
+          markRef={markRef}
+          markReason={markReason}
+          onClass={setClassFilter}
+          onReady={setReadyFilter}
+          onType={setTypeFilter}
+          onDivision={setDivisionFilter}
+          onOwner={setOwnerFilter}
+          onStatus={setStatusFilter}
+          onMarkLevel={setMarkLevel}
+          onMarkRef={setMarkRef}
+          onMarkReason={setMarkReason}
+          onMark={() => {
+            const source = markRef.split(":");
+            void control("priority-objective", {
+              kind: markLevel,
+              note: source[0] ?? "",
+              objective: source.slice(1).join(":"),
+              name: markReason,
+            });
+          }}
+          onRetire={(id) => void control("priority-objective-retire", { note: id })}
         />
 
         <form onSubmit={(event) => void submit(event)} className="mt-8">
@@ -688,6 +731,200 @@ function DependencyPanel({
           {plan.records.map((record) => <option key={`t:${record.type}:${record.id}`} value={`${record.type}:${record.id}`}>{record.label}</option>)}
         </select>
         <Button type="button" variant="quiet" disabled={busy || !owner || !sourceRef || !targetRef || sourceRef === targetRef} onClick={onAdd}>Add relationship</Button>
+      </div>
+    </section>
+  );
+}
+
+const CLASS_LABEL: Record<string, string> = {
+  P0: "P0 Critical",
+  P1: "P1 High",
+  P2: "P2 Normal",
+  P3: "P3 Low",
+  P4: "P4 Deferred",
+};
+
+const RECOMMEND_LABEL: Record<string, string> = {
+  do_now: "Do now",
+  do_next: "Do next",
+  prepare: "Prepare",
+  await_approval: "Await human approval",
+  resolve_blocker: "Resolve blocker",
+  assign_ownership: "Assign ownership",
+  defer: "Defer",
+};
+
+function PriorityPanel({
+  priority,
+  records,
+  owner,
+  busy,
+  classFilter,
+  readyFilter,
+  typeFilter,
+  divisionFilter,
+  ownerFilter,
+  statusFilter,
+  markLevel,
+  markRef,
+  markReason,
+  onClass,
+  onReady,
+  onType,
+  onDivision,
+  onOwner,
+  onStatus,
+  onMarkLevel,
+  onMarkRef,
+  onMarkReason,
+  onMark,
+  onRetire,
+}: {
+  priority: CommandCenter["priority"];
+  records: CommandCenter["plan"]["records"];
+  owner: boolean;
+  busy: boolean;
+  classFilter: string;
+  readyFilter: string;
+  typeFilter: string;
+  divisionFilter: string;
+  ownerFilter: string;
+  statusFilter: string;
+  markLevel: string;
+  markRef: string;
+  markReason: string;
+  onClass: (value: string) => void;
+  onReady: (value: string) => void;
+  onType: (value: string) => void;
+  onDivision: (value: string) => void;
+  onOwner: (value: string) => void;
+  onStatus: (value: string) => void;
+  onMarkLevel: (value: string) => void;
+  onMarkRef: (value: string) => void;
+  onMarkReason: (value: string) => void;
+  onMark: () => void;
+  onRetire: (id: string) => void;
+}) {
+  const match = (item: CommandCenter["priority"]["items"][number]) => {
+    if (classFilter !== "all" && item.classification !== classFilter) return false;
+    if (readyFilter !== "all" && item.readiness !== readyFilter) return false;
+    if (typeFilter !== "all" && item.recordType !== typeFilter) return false;
+    if (divisionFilter === "none" && item.division) return false;
+    if (divisionFilter !== "all" && divisionFilter !== "none" && item.division !== divisionFilter) return false;
+    if (ownerFilter === "gap" && item.ownerLabel) return false;
+    if (ownerFilter === "recorded" && !item.ownerLabel) return false;
+    if (statusFilter !== "all" && item.statusLabel !== statusFilter) return false;
+    return true;
+  };
+  const shown = priority.sequence.filter(match).slice(0, 8);
+  const blockedHigh = priority.items.filter((item) => (item.classification === "P0" || item.classification === "P1")
+    && (item.readiness === "blocked" || item.readiness === "missing" || item.readiness === "circular" || item.readiness === "approval")
+    && match(item)).slice(0, 4);
+  const statuses = [...new Set(priority.items.map((item) => item.statusLabel))].sort();
+  const tally = (name: string) => priority.items.filter((item) => item.classification === name).length;
+  return (
+    <section className="mt-4 border border-line bg-surface px-4 py-4">
+      <h2 className="text-sm font-medium">Priority</h2>
+      <p className="mt-2 text-sm text-muted">
+        Policy version {priority.policyVersion}. This is a recommendation, not an assignment and not an authorization. Opening the page does not run a cycle. {priority.deadlineNote}
+      </p>
+      <p className="mt-2 font-mono text-xs text-muted">
+        P0 {tally("P0")} · P1 {tally("P1")} · P2 {tally("P2")} · P3 {tally("P3")} · P4 {tally("P4")}
+      </p>
+      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+        <select value={classFilter} onChange={(event) => onClass(event.target.value)} className={`${controlClass} h-11`}>
+          <option value="all">All priorities</option>
+          {Object.entries(CLASS_LABEL).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+        </select>
+        <select value={readyFilter} onChange={(event) => onReady(event.target.value)} className={`${controlClass} h-11`}>
+          <option value="all">All readiness</option>
+          {Object.entries(PLAN_LABEL).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+        </select>
+        <select value={typeFilter} onChange={(event) => onType(event.target.value)} className={`${controlClass} h-11`}>
+          <option value="all">All record types</option>
+          {["obligation", "mission", "task", "order", "invoice"].map((value) => <option key={value} value={value}>{value}</option>)}
+        </select>
+        <select value={divisionFilter} onChange={(event) => onDivision(event.target.value)} className={`${controlClass} h-11`}>
+          <option value="all">All divisions</option>
+          <option value="none">Division not recorded</option>
+          {["formation", "governance", "finance", "product", "market", "operations", "people", "quality"].map((value) => <option key={value} value={value}>{value}</option>)}
+        </select>
+        <select value={ownerFilter} onChange={(event) => onOwner(event.target.value)} className={`${controlClass} h-11`}>
+          <option value="all">Any ownership</option>
+          <option value="gap">Ownership gap</option>
+          <option value="recorded">Owner recorded</option>
+        </select>
+        <select value={statusFilter} onChange={(event) => onStatus(event.target.value)} className={`${controlClass} h-11`}>
+          <option value="all">Any status</option>
+          {statuses.map((value) => <option key={value} value={value}>{value}</option>)}
+        </select>
+      </div>
+      {shown.length === 0 ? (
+        <p className="mt-3 text-sm text-muted">Nothing in this reading matches. A blank list is not a claim that the work is done.</p>
+      ) : (
+        <ol className="mt-3 space-y-3">
+          {shown.map((item, index) => (
+            <li key={`${item.recordType}:${item.recordId}`} className="border-t border-line pt-3">
+              <p className="text-sm">{index + 1}. {item.label}</p>
+              <p className={`mt-1 font-mono text-xs ${item.classification === "P0" ? "text-danger" : item.classification === "P1" ? "text-accent" : "text-muted"}`}>
+                {CLASS_LABEL[item.classification]} · {RECOMMEND_LABEL[item.recommendation] ?? item.recommendation} · {PLAN_LABEL[item.readiness] ?? item.readiness}
+                {item.restricted ? " · restricted" : ""}
+              </p>
+              <p className="mt-1 text-sm text-muted">{item.positionReason}</p>
+              <p className="mt-1 text-sm text-muted">{item.human}</p>
+              <p className="mt-1 text-sm text-muted">{item.factors.map((factor) => factor.evidence).join(" ")}</p>
+            </li>
+          ))}
+        </ol>
+      )}
+      {blockedHigh.length === 0 ? (
+        <p className="mt-3 text-sm text-muted">No high-priority work in this filter is blocked or waiting.</p>
+      ) : (
+        <ul className="mt-3 space-y-3">
+          {blockedHigh.map((item) => (
+            <li key={`held:${item.recordType}:${item.recordId}`} className="border-t border-line pt-3">
+              <p className="text-sm">{item.label}</p>
+              <p className="mt-1 font-mono text-xs text-danger">{CLASS_LABEL[item.classification]} stays blocked</p>
+              <p className="mt-1 text-sm text-muted">{item.human}</p>
+            </li>
+          ))}
+        </ul>
+      )}
+      {priority.changes.length === 0 ? (
+        <p className="mt-3 text-sm text-muted">No priority change is stored. Opening this page does not write one.</p>
+      ) : (
+        <ul className="mt-3 space-y-3">
+          {priority.changes.slice(0, 5).map((change) => (
+            <li key={change.id} className="border-t border-line pt-3 text-sm text-muted">
+              {change.previous ?? "None"} became {change.next}. {change.reason}
+            </li>
+          ))}
+        </ul>
+      )}
+      {priority.objectives.length === 0 ? null : (
+        <ul className="mt-3 space-y-3">
+          {priority.objectives.map((item) => (
+            <li key={item.id} className="border-t border-line pt-3">
+              <p className="text-sm">{item.label} · {item.level}</p>
+              <p className="mt-1 text-sm text-muted">{item.reason}</p>
+              <button type="button" className="mt-1 inline-flex h-11 items-center text-sm text-accent disabled:opacity-40" disabled={busy || !owner} onClick={() => onRetire(item.id)}>Retire objective</button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="mt-4 grid gap-2">
+        <select value={markLevel} onChange={(event) => onMarkLevel(event.target.value)} className={`${controlClass} h-11`} disabled={!owner}>
+          <option value="critical">Critical objective</option>
+          <option value="high">High objective</option>
+          <option value="low">Low objective</option>
+          <option value="defer">Defer objective</option>
+        </select>
+        <select value={markRef} onChange={(event) => onMarkRef(event.target.value)} className={`${controlClass} h-11`} disabled={!owner}>
+          <option value="">Record</option>
+          {records.map((record) => <option key={`m:${record.type}:${record.id}`} value={`${record.type}:${record.id}`}>{record.label}</option>)}
+        </select>
+        <textarea value={markReason} onChange={(event) => onMarkReason(event.target.value)} placeholder="Why this matters. A sentence, not a guess." className={`${controlClass} min-h-20 py-3`} disabled={!owner} />
+        <Button type="button" variant="quiet" disabled={busy || !owner || !markRef || markReason.trim().length < 12} onClick={onMark}>Record objective</Button>
       </div>
     </section>
   );

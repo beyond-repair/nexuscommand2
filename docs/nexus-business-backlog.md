@@ -296,7 +296,21 @@ Blocking edges are `depends_on` and `blocks`. Completion is the stored state: an
 
 A cycle reads that graph. Blocked, missing, circular, and approval-waiting research is not proposed. Delegated mode may still open a proposed mission for research that is free to start. The mission is not authorized. Restricted work stays out. Opening the page computes the reading and does not write findings. A cycle writes findings. A cleared finding is retired, not deleted.
 
-What it does not do: schedule itself, authorize launch, move money, accept an order, issue an invoice, or let an agent add or retire a relationship.
+What it does not do: schedule itself, authorize launch, move money, accept an order, issue an invoice, or let an agent add or retire a relationship. A completed middle record does not hide an open prerequisite further along the chain.
+
+### Priority
+
+Status: Tested on this tree. Decision support, not execution authority.
+
+Depends on: the control loop and dependency awareness.
+
+Database: `priority_policies`, `priority_objectives`, `priority_evaluations`, `priority_changes`. Policy version 1 is the only defined scoring rule. An owner may record a critical, high, low, or defer objective with a reason. Retirement keeps the row. Deleting priority history is rejected.
+
+Scoring uses only recorded evidence. A downstream unfinished record is 2 points, capped at 3 records. A recorded customer commitment is 6. An open claim is 2 and is not cash. A documented open obligation is 1. An owner mark of high adds 3. Low subtracts 2. Defer applies only when no customer commitment is recorded. Unknown factors, including deadlines and cash, add nothing. P0 exists only when an owner records a critical objective and a reason. The engine does not invent urgency.
+
+A recommendation is do now, do next, prepare, await human approval, resolve blocker, assign ownership, or defer. Blocked, missing, circular, and approval-waiting work is not recommended as ready. The sequence places an unfinished prerequisite ahead of a higher class. Restricted work stays with a person. Opening the page computes the reading and does not write evaluations. A cycle writes evaluations and priority changes. An unchanged reading does not add another change.
+
+What it does not do: authorize a mission, clear a dependency, grant approval, reclassify restricted work, authorize launch, move money, issue an invoice, accept an order, or let an agent change the policy or an objective.
 
 ### M8 — Support
 
