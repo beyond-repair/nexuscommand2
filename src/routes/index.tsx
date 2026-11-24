@@ -185,6 +185,8 @@ function Command() {
   const [markLevel, setMarkLevel] = useState("critical");
   const [markRef, setMarkRef] = useState("");
   const [markReason, setMarkReason] = useState("");
+  const [scheduleFilter, setScheduleFilter] = useState("open");
+  const [scheduleClass, setScheduleClass] = useState("all");
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -262,7 +264,7 @@ function Command() {
             </span>
           </div>
           <p className="mt-2 text-sm text-muted">
-            It reads open obligations, accepted orders, unpaid claims, dependencies, and priority. A notice is not execution. Blocked, circular, missing, or approval-waiting work is not proposed. Priority does not clear a blocker, grant approval, reclassify restricted work, or authorize a mission. Delegated may open a proposed mission for research work that is free to start. That mission is not authorized. The loop does not file, spend, publish, sign, or change who is allowed to do what. Restricted work stays with you.
+            It reads open obligations, accepted orders, unpaid claims, dependencies, and priority, then proposes a schedule order. A notice is not execution. Blocked, circular, missing, or approval-waiting work is not proposed. Priority does not clear a blocker, grant approval, reclassify restricted work, or authorize a mission. A schedule is not a timetable and accepting it does not authorize a mission. While the loop is stopped, a cycle does not write a schedule. Delegated may open a proposed mission for research work that is free to start. That mission is not authorized. The loop does not file, spend, publish, sign, or change who is allowed to do what. Restricted work stays with you. The department scheduler is separate and is unchanged.
           </p>
           {data.control.lastCycle ? (
             <p className="mt-2 font-mono text-xs text-muted tabular-nums">
@@ -352,6 +354,17 @@ function Command() {
             });
           }}
           onRetire={(id) => void control("priority-objective-retire", { note: id })}
+        />
+        <SchedulePanel
+          schedule={data.schedule}
+          owner={data.organization.role === "owner"}
+          busy={busy}
+          statusFilter={scheduleFilter}
+          classFilter={scheduleClass}
+          onStatus={setScheduleFilter}
+          onClass={setScheduleClass}
+          onAccept={() => void control("schedule-accept")}
+          onCancel={(which) => void control("schedule-cancel", { kind: which })}
         />
 
         <form onSubmit={(event) => void submit(event)} className="mt-8">
@@ -925,6 +938,126 @@ function PriorityPanel({
         </select>
         <textarea value={markReason} onChange={(event) => onMarkReason(event.target.value)} placeholder="Why this matters. A sentence, not a guess." className={`${controlClass} min-h-20 py-3`} disabled={!owner} />
         <Button type="button" variant="quiet" disabled={busy || !owner || !markRef || markReason.trim().length < 12} onClick={onMark}>Record objective</Button>
+      </div>
+    </section>
+  );
+}
+
+const SCHEDULE_LABEL: Record<string, string> = {
+  schedulable: "Schedulable proposal",
+  unassigned: "Ready but unassigned",
+  blocked: "Blocked",
+  approval: "Awaiting human approval",
+  restricted: "Restricted",
+  proposed: "Proposed mission",
+  authorized: "Already authorized",
+  excluded: "Excluded",
+  conflict: "Resource conflict",
+};
+
+function SchedulePanel({
+  schedule,
+  owner,
+  busy,
+  statusFilter,
+  classFilter,
+  onStatus,
+  onClass,
+  onAccept,
+  onCancel,
+}: {
+  schedule: CommandCenter["schedule"];
+  owner: boolean;
+  busy: boolean;
+  statusFilter: string;
+  classFilter: string;
+  onStatus: (value: string) => void;
+  onClass: (value: string) => void;
+  onAccept: () => void;
+  onCancel: (which: "proposed" | "accepted") => void;
+}) {
+  const match = (item: CommandCenter["schedule"]["items"][number]) => {
+    if (statusFilter === "open" && item.schedulingStatus === "excluded") return false;
+    if (statusFilter !== "all" && statusFilter !== "open" && item.schedulingStatus !== statusFilter) return false;
+    if (classFilter !== "all" && item.priorityClass !== classFilter) return false;
+    return true;
+  };
+  const shown = schedule.items.filter(match).slice(0, 8);
+  return (
+    <section className="mt-4 border border-line bg-surface px-4 py-4">
+      <h2 className="text-sm font-medium">Schedule</h2>
+      <p className="mt-2 text-sm text-muted">
+        Policy version {schedule.policyVersion}. This is a proposed order, not a calendar and not an authorization. {schedule.note} People on record: {schedule.people}. Agents on record: {schedule.agents}. Availability is unknown for every one of them.
+      </p>
+      {schedule.proposed ? (
+        <p className="mt-2 text-sm text-muted">Stored proposal version {schedule.proposed.version}. {schedule.diverged ? "The reading has changed since that version. Run a cycle to record it. This page does not." : "The reading matches the stored proposal."} Accepting it does not authorize a mission.</p>
+      ) : (
+        <p className="mt-2 text-sm text-muted">No schedule is stored. This reading is a draft on the page only. Opening the page does not write one.</p>
+      )}
+      {schedule.accepted ? (
+        <p className="mt-2 text-sm text-muted">Accepted version {schedule.accepted.version} is the owner's last accepted order. It still does not authorize a mission. {schedule.accepted.explanation}</p>
+      ) : (
+        <p className="mt-2 text-sm text-muted">No schedule has been accepted.</p>
+      )}
+      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+        <select value={statusFilter} onChange={(event) => onStatus(event.target.value)} className={`${controlClass} h-11`}>
+          <option value="open">Open work</option>
+          <option value="all">Including excluded</option>
+          {Object.entries(SCHEDULE_LABEL).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+        </select>
+        <select value={classFilter} onChange={(event) => onClass(event.target.value)} className={`${controlClass} h-11`}>
+          <option value="all">All priorities</option>
+          {Object.entries(CLASS_LABEL).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+        </select>
+      </div>
+      {shown.length === 0 ? (
+        <p className="mt-3 text-sm text-muted">Nothing in this reading matches. A blank list is not a claim that the work is done.</p>
+      ) : (
+        <ol className="mt-3 space-y-3">
+          {shown.map((item) => (
+            <li key={`${item.recordType}:${item.recordId}`} className="border-t border-line pt-3">
+              <p className="text-sm">{item.position}. {item.label}</p>
+              <p className={`mt-1 font-mono text-xs ${item.schedulingStatus === "conflict" || item.schedulingStatus === "blocked" ? "text-danger" : item.schedulingStatus === "schedulable" ? "text-accent" : "text-muted"}`}>
+                {SCHEDULE_LABEL[item.schedulingStatus] ?? item.schedulingStatus}
+                {item.priorityClass === "unscored" ? "" : ` · ${CLASS_LABEL[item.priorityClass] ?? item.priorityClass}`}
+                {" · "}{PLAN_LABEL[item.readiness] ?? item.readiness}
+                {item.executable ? " · proposal only" : " · not executable"}
+              </p>
+              <p className="mt-1 text-sm text-muted">{item.reason}</p>
+              <p className="mt-1 text-sm text-muted">
+                {item.resourceLabel ? `Recorded resource ${item.resourceLabel}. ` : "No eligible resource is recorded. "}
+                Duration unknown. Availability unknown. No start or end.
+              </p>
+              {item.dependencyNote ? <p className="mt-1 text-sm text-muted">{item.dependencyNote}</p> : null}
+            </li>
+          ))}
+        </ol>
+      )}
+      {schedule.conflicts.length === 0 ? (
+        <p className="mt-3 text-sm text-muted">No resource conflict is in this reading. Unknown duration is not being treated as a free hour.</p>
+      ) : (
+        <ul className="mt-3 space-y-3">
+          {schedule.conflicts.slice(0, 4).map((conflict) => (
+            <li key={`${conflict.recordType}:${conflict.recordId}`} className="border-t border-line pt-3">
+              <p className="text-sm">Resource conflict</p>
+              <p className="mt-1 text-sm text-muted">{conflict.reason}</p>
+            </li>
+          ))}
+        </ul>
+      )}
+      {schedule.events.length === 0 ? (
+        <p className="mt-3 text-sm text-muted">No schedule change is stored.</p>
+      ) : (
+        <ul className="mt-3 space-y-3">
+          {schedule.events.slice(0, 5).map((event) => (
+            <li key={event.id} className="border-t border-line pt-3 text-sm text-muted">{event.summary}</li>
+          ))}
+        </ul>
+      )}
+      <div className="mt-4 flex flex-wrap gap-2">
+        <Button type="button" variant="quiet" disabled={busy || !owner || !schedule.proposed} onClick={onAccept}>Accept proposed schedule</Button>
+        <Button type="button" variant="quiet" disabled={busy || !owner || !schedule.proposed} onClick={() => onCancel("proposed")}>Cancel proposed</Button>
+        <Button type="button" variant="quiet" disabled={busy || !owner || !schedule.accepted} onClick={() => onCancel("accepted")}>Cancel accepted</Button>
       </div>
     </section>
   );

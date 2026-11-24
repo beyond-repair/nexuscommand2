@@ -2,6 +2,7 @@ import { CompanyError } from "./company.ts";
 import type { Sql } from "./company-store.ts";
 import { evaluateDependencies, syncDependencyFindings, type PlanItem } from "./dependencies.ts";
 import { evaluatePriority, syncPriority } from "./priority.ts";
+import { evaluateSchedule, syncSchedule } from "./schedule.ts";
 import { staffObligation } from "./venture.ts";
 
 const PROPOSE = "work.propose";
@@ -176,6 +177,10 @@ export async function runControlCycle(sql: Sql, input: { orgId: string; actorId:
     await tx`insert into control_cycles (id, organization_id, actor_id, observed, decided, proposed)
       values (${cycleId}, ${input.orgId}, ${input.actorId}, ${0}, ${0}, ${0})`;
     await syncPriority(tx, input.orgId, input.actorId, cycleId, priority);
+    if (!policy.halted) {
+      const schedule = await evaluateSchedule(tx, input.orgId, plan, priority);
+      await syncSchedule(tx, input.orgId, input.actorId, cycleId, schedule);
+    }
     const held = new Map<string, PlanItem>();
     for (const item of plan.items) {
       if (item.recordType !== "obligation") continue;
