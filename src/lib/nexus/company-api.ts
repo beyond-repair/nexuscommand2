@@ -68,6 +68,8 @@ import {
 import { loadBusiness } from "./venture";
 import { runControlCycle, setControlHalt, setControlPolicy } from "./control-loop";
 import { addRelationship, retireRelationship } from "./dependencies";
+import { retirePriorityObjective, setPriorityObjective, setPriorityPolicy } from "./priority";
+import { acceptSchedule, cancelSchedule, setSchedulePolicy } from "./schedule";
 import { assertCommandRate } from "./command-rate";
 import { schedulerTick } from "./scheduler";
 
@@ -475,6 +477,43 @@ export const companyCommand = createServerFn({ method: "POST" })
     if (data.type === "dependency-retire") {
       const scope = await requireOwnerScope(sql, context.userId);
       await retireRelationship(sql, { orgId: scope.orgId, actorId: context.userId, relationshipId: data.note ?? "" });
+      return { ok: true as const };
+    }
+    if (data.type === "priority-objective") {
+      const scope = await requireOwnerScope(sql, context.userId);
+      await setPriorityObjective(sql, {
+        orgId: scope.orgId,
+        actorId: context.userId,
+        level: data.kind ?? "",
+        sourceType: data.note ?? "",
+        sourceId: data.objective ?? "",
+        reason: data.name ?? "",
+      });
+      return { ok: true as const };
+    }
+    if (data.type === "priority-objective-retire") {
+      const scope = await requireOwnerScope(sql, context.userId);
+      await retirePriorityObjective(sql, { orgId: scope.orgId, actorId: context.userId, objectiveId: data.note ?? "" });
+      return { ok: true as const };
+    }
+    if (data.type === "priority-policy") {
+      const scope = await requireOwnerScope(sql, context.userId);
+      await setPriorityPolicy(sql, { orgId: scope.orgId, actorId: context.userId, version: data.kind ?? "" });
+      return { ok: true as const };
+    }
+    if (data.type === "schedule-accept") {
+      const scope = await requireOwnerScope(sql, context.userId);
+      await acceptSchedule(sql, { orgId: scope.orgId, actorId: context.userId });
+      return { ok: true as const };
+    }
+    if (data.type === "schedule-cancel") {
+      const scope = await requireOwnerScope(sql, context.userId);
+      await cancelSchedule(sql, { orgId: scope.orgId, actorId: context.userId, which: data.kind ?? "" });
+      return { ok: true as const };
+    }
+    if (data.type === "schedule-policy") {
+      const scope = await requireOwnerScope(sql, context.userId);
+      await setSchedulePolicy(sql, { orgId: scope.orgId, actorId: context.userId, version: data.kind ?? "" });
       return { ok: true as const };
     }
     throw new Error("Unknown command");

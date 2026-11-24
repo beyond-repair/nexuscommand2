@@ -180,7 +180,14 @@ test("dependencies explain order, and the control loop still cannot authorize wo
   const findings = await count(db, "select count(*)::int as n from dependency_findings where organization_id = $1", [orgId]);
   await runControlCycle(sql, { orgId, actorId: owner });
   assert.equal(await count(db, "select count(*)::int as n from dependency_findings where organization_id = $1", [orgId]), findings);
-  await waiveObligation(sql, { orgId, actorId: owner, obligationId: p1.id, reason: "The prerequisite is satisfied." });
+  await waiveObligation(sql, { orgId, actorId: owner, obligationId: p1.id, reason: "The middle record is satisfied." });
+  const stillBlocked = await evaluateDependencies(sql, orgId);
+  assert.equal(stillBlocked.items.find((item) => item.recordId === p0.id)?.status, "blocked");
+  assert.match(stillBlocked.items.find((item) => item.recordId === p0.id)?.evidence ?? "", /Unfinished/);
+  assert.ok((stillBlocked.items.find((item) => item.recordId === p0.id)?.evidence ?? "").includes(p2.title));
+  await runControlCycle(sql, { orgId, actorId: owner });
+  assert.equal(await count(db, "select count(*)::int as n from dependency_findings where idempotency_key = $1 and state = 'active'", [blockedKey]), 1);
+  await waiveObligation(sql, { orgId, actorId: owner, obligationId: p2.id, reason: "The further prerequisite is satisfied." });
   await runControlCycle(sql, { orgId, actorId: owner });
   assert.equal(await count(db, "select count(*)::int as n from dependency_findings where idempotency_key = $1 and state = 'retired'", [blockedKey]), 1);
   assert.equal(await count(db, "select count(*)::int as n from missions where organization_id = $1 and id <> 'msn_wait'", [orgId]), 0);

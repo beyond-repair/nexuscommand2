@@ -1,6 +1,8 @@
 import { CompanyError } from "./company.ts";
 import type { Sql } from "./company-store.ts";
 import { evaluateDependencies, syncDependencyFindings, type PlanItem } from "./dependencies.ts";
+import { evaluatePriority, syncPriority } from "./priority.ts";
+import { evaluateSchedule, syncSchedule } from "./schedule.ts";
 import { staffObligation } from "./venture.ts";
 
 const PROPOSE = "work.propose";
@@ -170,6 +172,15 @@ export async function runControlCycle(sql: Sql, input: { orgId: string; actorId:
     const delegate = policy.level === 2 && !policy.halted;
     const plan = await evaluateDependencies(tx, input.orgId);
     await syncDependencyFindings(tx, input.orgId, input.actorId, plan);
+    const priority = await evaluatePriority(tx, input.orgId, plan);
+    const cycleId = nid("cyc");
+    await tx`insert into control_cycles (id, organization_id, actor_id, observed, decided, proposed)
+      values (${cycleId}, ${input.orgId}, ${input.actorId}, ${0}, ${0}, ${0})`;
+    await syncPriority(tx, input.orgId, input.actorId, cycleId, priority);
+    if (!policy.halted) {
+      const schedule = await evaluateSchedule(tx, input.orgId, plan, priority);
+      await syncSchedule(tx, input.orgId, input.actorId, cycleId, schedule);
+    }
     const held = new Map<string, PlanItem>();
     for (const item of plan.items) {
       if (item.recordType !== "obligation") continue;
@@ -187,11 +198,8 @@ export async function runControlCycle(sql: Sql, input: { orgId: string; actorId:
       item.delegable = false;
       item.hold = hold;
     }
-    const cycleId = nid("cyc");
     let decided = 0;
     let proposed = 0;
-    await tx`insert into control_cycles (id, organization_id, actor_id, observed, decided, proposed)
-      values (${cycleId}, ${input.orgId}, ${input.actorId}, ${observations.length}, ${0}, ${0})`;
     for (const item of observations) {
       const inserted = await tx<{ id: string }>`insert into control_events (
         id, organization_id, event_type, source_type, source_id, summary, idempotency_key, created_by

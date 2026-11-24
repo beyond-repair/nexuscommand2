@@ -110,7 +110,7 @@ async function audit(sql: Sql, orgId: string, actorId: string, action: string, t
   )`;
 }
 
-async function requireRecord(sql: Sql, orgId: string, type: string, id: string): Promise<string> {
+export async function requireRecord(sql: Sql, orgId: string, type: string, id: string): Promise<string> {
   if (!RECORD_TYPES.includes(type as RecordTypeName)) throw new CompanyError("That record type cannot take a dependency.");
   const cleanId = id.trim();
   if (!cleanId) throw new CompanyError("Name the record.");
@@ -389,7 +389,10 @@ export async function evaluateDependencies(sql: Sql, orgId: string): Promise<Dep
         labels.push(node?.label ?? next);
         continue;
       }
-      if (node.done) continue;
+      if (node.done) {
+        for (const child of adj.get(next) ?? []) queue.push(child);
+        continue;
+      }
       labels.push(`${node.label} (${node.stateLabel})`);
       for (const child of adj.get(next) ?? []) queue.push(child);
     }

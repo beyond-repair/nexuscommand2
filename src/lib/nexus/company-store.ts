@@ -76,6 +76,8 @@ import {
 import { ventureSummary } from "./venture.ts";
 import { loadControl, type ControlSnapshot } from "./control-loop.ts";
 import { loadDependencyPlan, type DependencyPlan } from "./dependencies.ts";
+import { loadPriorityPlan, type PriorityPlan } from "./priority.ts";
+import { loadSchedule, type ScheduleView } from "./schedule.ts";
 import {
   addContact,
   archiveParty,
@@ -181,6 +183,8 @@ export type CommandCenter = {
   };
   control: ControlSnapshot;
   plan: DependencyPlan;
+  priority: PriorityPlan;
+  schedule: ScheduleView;
   providers: Array<{
     provider: string;
     model: string;
@@ -463,6 +467,8 @@ export async function commandCenter(sql: Sql, userId: string): Promise<CommandCe
     business: await ventureSummary(sql, ws.orgId),
     control: await loadControl(sql, ws.orgId),
     plan: await loadDependencyPlan(sql, ws.orgId),
+    priority: await loadPriorityPlan(sql, ws.orgId),
+    schedule: await loadSchedule(sql, ws.orgId),
     providers: await providerSnapshot(sql, ws.orgId),
     world: await worldSnapshot(sql, ws.orgId),
   };
