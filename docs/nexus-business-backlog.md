@@ -23,7 +23,7 @@ A row is not done because a table or screen exists. It is done when the workflow
 | Integration registry, sealed secrets, GitHub read-only | Tested | `integrations`, `integration_secrets`, `github_*` | GitHub is not authenticated. Writes stay refused |
 | Cross-organization lease denial | Tested | lease test with `org_a` and `org_b` | Not a multi-business product |
 | Projects, tasks, task runs, approvals | Implemented | `0002_nexus.sql` | Not connected to missions. Do not sync them silently |
-| Customers, catalog, orders, invoices, journal, employees, suppliers, tickets | Partial | Parties, offers, quotes, orders, invoices, and the business record are tested. A general journal is not. | Build them on the objects below |
+| Customers, catalog, orders, invoices, journal, employees, suppliers, tickets | Partial | Parties, offers, quotes, orders, invoices, the business record, and the control loop are tested. A general journal is not. | Build them on the objects below |
 
 `npm test` runs the NEXUS suite, the app suite, and the workspace suite, and exits non-zero if any of them fail. On this tree it exits 0. `npm run build` exits 0. That build is not a deployment. A missing auth flag still means sign-in is on. The share title for this workspace is `ADL NEXUS`.
 
@@ -251,6 +251,80 @@ Acceptance:
 - Re-running the post for the same source does not create a second entry.
 - An agent cannot post.
 - A manual journal line from the client is rejected.
+
+
+### Organizational control loop
+
+Status: Tested on this tree. Not a second mission lifecycle, and not unsupervised execution.
+
+Depends on: M1, M5, M6.
+
+Database: `control_policies`, `control_cycles`, `control_events`, `control_decisions`. One policy row per company for `work.propose`. Levels are 0 manual, 1 assisted, and 2 delegated. The default is assisted. A stop flag is separate from the level. Events and decisions cannot be updated or deleted.
+
+What a cycle does:
+
+- Reads open obligations with no mission, accepted orders with no mission link, and issued invoices that are not fully allocated.
+- Writes one immutable event per idempotency key. A second cycle does not decide that event again.
+- Assisted and manual leave a notice. Delegated calls the existing staffing path, which opens a `PROPOSED` mission. That mission is not authorized.
+- Restricted obligations, unlinked orders, and open claims are notices at every level, including delegated.
+- A notice taken while assisted does not block a later delegation. Delegation uses its own key and can still propose.
+- Stop records notices and opens nothing, even at delegated. Resume does not authorize the missions it later proposes.
+- Opening the command page does not run a cycle.
+
+What it does not do: levels 3 or 4, learning, a knowledge graph, a second workflow engine, filing, payments, bank movement, publication, contract signing, payroll, or a change to security permissions. The existing scheduler pause and stop are unchanged.
+
+Acceptance:
+
+- An agent cannot run the loop or change its policy.
+- A non-owner cannot run it.
+- Assisted and manual cycles create no missions.
+- A restricted obligation never receives a mission.
+- Delegated missions stay `PROPOSED`. The ceiling, payments, order links, and invoice count do not change.
+- A second cycle does not add a duplicate decision or mission.
+- Another company cannot see the events or decisions.
+- Control events and decisions cannot be updated or deleted.
+
+### Dependency awareness
+
+Status: Tested on this tree. Not execution authority.
+
+Depends on: the organizational control loop.
+
+Database: `organizational_relationships`, `dependency_findings`. A relationship is `depends_on`, `blocks`, `requires_approval`, `owned_by`, `assigned_to`, `produces`, `satisfies`, `derived_from`, or `related_to`. Both records must already belong to the same company. An active duplicate is rejected. A record cannot relate to itself. Retirement keeps the row. Deleting a relationship or a finding is rejected.
+
+Blocking edges are `depends_on` and `blocks`. Completion is the stored state: an obligation is complete only when satisfied or waived, a mission only when accepted, a task only when completed, an order only when fulfilled, and an issued invoice only when nothing remains open. A proposed mission is not complete. There is no reliable deadline column, so nothing is marked overdue.
+
+A cycle reads that graph. Blocked, missing, circular, and approval-waiting research is not proposed. Delegated mode may still open a proposed mission for research that is free to start. The mission is not authorized. Restricted work stays out. Opening the page computes the reading and does not write findings. A cycle writes findings. A cleared finding is retired, not deleted.
+
+What it does not do: schedule itself, authorize launch, move money, accept an order, issue an invoice, or let an agent add or retire a relationship. A completed middle record does not hide an open prerequisite further along the chain.
+
+### Priority
+
+Status: Tested on this tree. Decision support, not execution authority.
+
+Depends on: the control loop and dependency awareness.
+
+Database: `priority_policies`, `priority_objectives`, `priority_evaluations`, `priority_changes`. Policy version 1 is the only defined scoring rule. An owner may record a critical, high, low, or defer objective with a reason. Retirement keeps the row. Deleting priority history is rejected.
+
+Scoring uses only recorded evidence. A downstream unfinished record is 2 points, capped at 3 records. A recorded customer commitment is 6. An open claim is 2 and is not cash. A documented open obligation is 1. An owner mark of high adds 3. Low subtracts 2. Defer applies only when no customer commitment is recorded. Unknown factors, including deadlines and cash, add nothing. P0 exists only when an owner records a critical objective and a reason. The engine does not invent urgency.
+
+A recommendation is do now, do next, prepare, await human approval, resolve blocker, assign ownership, or defer. Blocked, missing, circular, and approval-waiting work is not recommended as ready. The sequence places an unfinished prerequisite ahead of a higher class. Restricted work stays with a person. Opening the page computes the reading and does not write evaluations. A cycle writes evaluations and priority changes. An unchanged reading does not add another change.
+
+What it does not do: authorize a mission, clear a dependency, grant approval, reclassify restricted work, authorize launch, move money, issue an invoice, accept an order, or let an agent change the policy or an objective.
+
+### Schedule
+
+Status: Tested on this tree. A proposal about order, not permission to execute.
+
+Depends on: the control loop, dependency awareness, and priority.
+
+Database: `schedule_policies`, `schedule_plans`, `schedule_items`, `schedule_conflicts`, `schedule_events`. Policy version 1 is the only defined rule. A plan is proposed, accepted, superseded, or cancelled. The unsaved reading is a draft and is not a row. Windows cannot be stored. Duration and availability can only be the value unknown. Deleting schedule history is rejected.
+
+The order is the dependency sequence, then priority class, then title, then id. Blocked, missing, circular, approval-waiting, restricted, completed, and cancelled work are not executable slots. A proposed mission stays proposed. Already authorized work is not started by the schedule. A recorded assignee is eligible only inside this company. The same assignee is not placed twice, because duration is unknown and a second placement would be a double-booking. Membership alone is not eligibility. An agent title is not a capability.
+
+A cycle writes a proposed plan when the loop is not stopped. An unchanged fingerprint does not add another plan. Opening the page computes the reading and does not write. Only the owner can accept or cancel. Acceptance does not authorize a mission. The department scheduler is a separate control and is unchanged.
+
+What it does not do: authorize launch, move money, issue an invoice, accept an order, publish, file, sign, assign an agent to itself, or let an agent accept a schedule.
 
 ### M8 — Support
 
