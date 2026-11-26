@@ -143,12 +143,12 @@ function OpenForm({ reload, onError }: { reload: () => void; onError: (message: 
 
 function RecordTab({ data, reload, onError }: { data: BusinessView; reload: () => void; onError: (message: string | null) => void }) {
   const venture = data.venture;
-  if (!venture) return null;
-  const [stage, setStage] = useState(venture.stage);
-  const [structure, setStructure] = useState(venture.structure);
-  const [burn, setBurn] = useState(venture.monthlyBurnCents ? (venture.monthlyBurnCents / 100).toFixed(2) : "");
+  const [stage, setStage] = useState(venture?.stage ?? "concept");
+  const [structure, setStructure] = useState(venture?.structure ?? "undecided");
+  const [burn, setBurn] = useState(venture?.monthlyBurnCents ? (venture.monthlyBurnCents / 100).toFixed(2) : "");
   const [launchNote, setLaunchNote] = useState("");
   const [selected, setSelected] = useState(data.obligations[0]?.id ?? "");
+  if (!venture) return null;
   const obligation = data.obligations.find((item) => item.id === selected) ?? null;
   return (
     <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_18rem]">
@@ -258,6 +258,8 @@ function Statement({ data }: { data: BusinessView }) {
     ["Funding marked", formatMoney(row.fundingMarkedReceivedCents)],
     ["Receivable", formatMoney(row.receivableCents)],
     ["Payable", formatMoney(row.payableCents)],
+    ["Claims posted", row.journalClaimsCents == null ? "Unavailable" : formatMoney(row.journalClaimsCents)],
+    ["Obligations posted", row.journalObligationsCents == null ? "Unavailable" : formatMoney(row.journalObligationsCents)],
   ];
   return (
     <aside>
@@ -391,7 +393,7 @@ function FinanceTab({ data, reload, onError }: { data: BusinessView; reload: () 
         </section>
         <section>
           <h2 className="text-sm font-medium">Invoices</h2>
-          <p className="mt-2 text-sm text-muted">Issuing an invoice does not collect or pay it. Allocate only a matching receipt or expenditure.</p>
+          <p className="mt-2 text-sm text-muted">Issuing an invoice assigns the next number and posts a claim. It does not collect or pay it. Voiding keeps the row and the payment. A second open invoice on the same order is refused.</p>
           <form className="mt-4 grid gap-3 sm:grid-cols-2" onSubmit={(event) => event.preventDefault()}>
             <Field label="Direction">
               <select value={direction} onChange={(event) => setDirection(event.target.value)} className={`${controlClass} h-11`}>
@@ -414,7 +416,13 @@ function FinanceTab({ data, reload, onError }: { data: BusinessView; reload: () 
               <li key={item.id} className="py-3 text-sm">
                 <p>{item.number ? `${item.number} · ` : ""}{item.title} · {item.partyName} · {item.status}</p>
                 <p className="font-mono text-xs text-muted tabular-nums">{formatMoney(item.allocatedCents)} of {formatMoney(item.amountCents)}</p>
-                {item.status === "draft" ? <div className="mt-2"><Quiet onError={onError} onDone={reload} label="Issue" run={() => businessCommand({ data: { type: "issue-invoice", recordId: item.id } })} /></div> : null}
+                {item.number && !item.posted ? <p className="text-xs text-muted">Not posted. This claim is unavailable, not zero.</p> : null}
+                {item.status === "draft" || item.status === "issued" ? (
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {item.status === "draft" ? <Quiet onError={onError} onDone={reload} label="Issue" run={() => businessCommand({ data: { type: "issue-invoice", recordId: item.id } })} /> : null}
+                    <Quiet onError={onError} onDone={reload} label="Void" run={() => businessCommand({ data: { type: "void-invoice", recordId: item.id } })} />
+                  </div>
+                ) : null}
               </li>
             ))}
           </ul>
@@ -434,6 +442,24 @@ function FinanceTab({ data, reload, onError }: { data: BusinessView; reload: () 
             <Field label="Allocate"><input value={alloc} onChange={(event) => setAlloc(event.target.value)} inputMode="decimal" className={`${controlClass} h-11`} /></Field>
           </form>
           <div className="mt-3"><Quiet onError={onError} onDone={reload} label="Allocate" run={() => businessCommand({ data: { type: "allocate", recordId: invoiceId, paymentId, amount: alloc } })} /></div>
+        </section>
+        <section>
+          <h2 className="text-sm font-medium">Journal</h2>
+          <p className="mt-2 text-sm text-muted">Posted only from an invoice issue, allocation, or void. A line cannot be typed in, and a posted row cannot be edited. This is not a bank balance.</p>
+          <ul className="mt-4 divide-y divide-line border-y border-line">
+            {data.journal.length === 0 ? <li className="py-3 text-sm text-muted">No posted entries. A missing posting is not shown as zero.</li> : data.journal.map((entry) => (
+              <li key={entry.id} className="py-3 text-sm">
+                <p>{entry.sourceType === "invoice.issued" ? "Issued" : entry.sourceType === "invoice.allocated" ? "Allocated" : "Voided"}</p>
+                <ul className="mt-1 text-muted">
+                  {entry.lines.map((line) => (
+                    <li key={`${entry.id}-${line.code}`} className="font-mono text-xs tabular-nums">
+                      {line.code} {line.name} · {line.debitCents > 0 ? `Dr ${formatMoney(line.debitCents)}` : `Cr ${formatMoney(line.creditCents)}`}
+                    </li>
+                  ))}
+                </ul>
+              </li>
+            ))}
+          </ul>
         </section>
       </div>
       <Statement data={data} />

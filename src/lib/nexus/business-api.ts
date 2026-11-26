@@ -43,6 +43,7 @@ import {
   issueQuote,
   acceptQuote,
   cancelOrder,
+  refuseManualJournal,
   fulfillOrder,
   linkOrderMission,
   invoiceOrder,
@@ -270,5 +271,6 @@ export const businessCommand = createServerFn({ method: "POST" })
       await invoiceOrder(sql, { ...base, orderId: data.recordId });
       return { ok: true as const };
     }
+    if (data.type === "journal" || data.type === "journal-line") refuseManualJournal();
     throw new Error("Unknown command");
   });
