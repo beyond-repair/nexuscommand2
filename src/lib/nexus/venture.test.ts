@@ -5,7 +5,6 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { PGlite } from "@electric-sql/pglite";
 import { assignRole, createOffer, createParty, deactivateRole, reactivateRole, retireOffer } from "./books.ts";
-import { CompanyError } from "./company.ts";
 import { commandCenter, recordExpenditure, recordPayment, setSpendingCeiling, submitMission, type Sql } from "./company-store.ts";
 import {
   acceptQuote,
@@ -424,6 +423,11 @@ test("invoice numbers, voids, and journal entries stay on the claim", async () =
   });
   assert.equal((await db.query<{ n: number }>("select count(*)::int as n from journal_entries")).rows[0]?.n, 2);
   assert.equal((await db.query<{ n: number }>("select count(*)::int as n from journal_lines")).rows[0]?.n, beforeLines);
+  await assert.rejects(postBalancedEntry(sql, {
+    orgId, actorId: owner, sourceType: "invoice.allocated", sourceId: allocationId,
+    lines: [{ code: "1300", debitCents: 100, creditCents: 0 }, { code: "1200", debitCents: 0, creditCents: 100 }],
+  }), /already posted/);
+  assert.equal((await db.query<{ n: number }>("select count(*)::int as n from journal_lines")).rows[0]?.n, beforeLines);
   let books = await loadBusiness(sql, orgId);
   assert.equal(books.statement.receivableCents, 2500);
   assert.equal(books.statement.journalClaimsCents, 2500);
@@ -488,5 +492,16 @@ test("invoice numbers, voids, and journal entries stay on the claim", async () =
   const other = (await commandCenter(sql, "user_other_journal")).organization.id;
   assert.equal((await loadBusiness(sql, other)).journal.length, 0);
   assert.equal(JSON.stringify(await loadBusiness(sql, other)).includes("INV-0001"), false);
+  await assert.rejects(postBalancedEntry(sql, {
+    orgId: other, actorId: owner, sourceType: "invoice.issued", sourceId: open.id,
+    lines: [{ code: "1200", debitCents: 100, creditCents: 0 }, { code: "4100", debitCents: 0, creditCents: 100 }],
+  }), /not in this company/);
+  await assert.rejects(sql.transaction!(async (tx) => {
+    await tx`insert into journal_entries (id, organization_id, source_type, source_id, created_by)
+      values (${"jrn_bad"}, ${orgId}, ${"invoice.void"}, ${"not-a-source"}, ${owner})`;
+    await tx`insert into journal_lines (id, organization_id, entry_id, account_id, debit_cents, credit_cents)
+      values (${"jln_bad"}, ${orgId}, ${"jrn_bad"}, ${`${orgId}:1200`}, ${100}, ${0})`;
+  }), /must balance/);
+  assert.equal((await db.query<{ n: number }>("select count(*)::int as n from journal_entries where id = 'jrn_bad'")).rows[0]?.n, 0);
   await db.close();
 });

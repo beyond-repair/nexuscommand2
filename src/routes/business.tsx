@@ -143,12 +143,12 @@ function OpenForm({ reload, onError }: { reload: () => void; onError: (message: 
 
 function RecordTab({ data, reload, onError }: { data: BusinessView; reload: () => void; onError: (message: string | null) => void }) {
   const venture = data.venture;
-  if (!venture) return null;
-  const [stage, setStage] = useState(venture.stage);
-  const [structure, setStructure] = useState(venture.structure);
-  const [burn, setBurn] = useState(venture.monthlyBurnCents ? (venture.monthlyBurnCents / 100).toFixed(2) : "");
+  const [stage, setStage] = useState(venture?.stage ?? "concept");
+  const [structure, setStructure] = useState(venture?.structure ?? "undecided");
+  const [burn, setBurn] = useState(venture?.monthlyBurnCents ? (venture.monthlyBurnCents / 100).toFixed(2) : "");
   const [launchNote, setLaunchNote] = useState("");
   const [selected, setSelected] = useState(data.obligations[0]?.id ?? "");
+  if (!venture) return null;
   const obligation = data.obligations.find((item) => item.id === selected) ?? null;
   return (
     <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_18rem]">

@@ -71,6 +71,39 @@ create table if not exists journal_lines (
 
 create index if not exists journal_entries_org_idx on journal_entries (organization_id, posted_at);
 
+-- Every insert of lines must balance on its own. The posting function inserts
+-- all of an entry's lines in one statement, so a partial or one-sided insert
+-- cannot commit.
+create or replace function journal_entry_must_balance()
+returns trigger
+language plpgsql
+as $$
+declare
+  bad integer;
+begin
+  select count(*) into bad
+  from (
+    select entry_id
+    from new_lines
+    group by entry_id
+    having sum(debit_cents) <> sum(credit_cents)
+        or sum(debit_cents) < 1
+        or count(*) < 2
+  ) unbalanced;
+  if bad > 0 then
+    raise exception 'A journal entry must balance';
+  end if;
+  return null;
+end;
+$$;
+
+drop trigger if exists journal_lines_must_balance on journal_lines;
+create trigger journal_lines_must_balance
+  after insert on journal_lines
+  referencing new table as new_lines
+  for each statement
+  execute function journal_entry_must_balance();
+
 create or replace function journal_rows_immutable()
 returns trigger
 language plpgsql

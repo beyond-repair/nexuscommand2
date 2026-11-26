@@ -435,16 +435,48 @@ export async function postBalancedEntry(sql: Sql, input: {
     lines.push({ code: line.code, debitCents: dr, creditCents: cr });
   }
   if (lines.length < 2 || debit !== credit || debit < 1) throw new CompanyError("A journal entry must balance.");
+  if (lines.length > 3) throw new CompanyError("A journal entry must balance.");
   await ensureChart(sql, input.orgId);
+  if (input.sourceType === "invoice.allocated") {
+    const allocation = await sql<{ id: string }>`select id from invoice_allocations
+      where id = ${input.sourceId} and organization_id = ${input.orgId} limit 1`;
+    if (!allocation[0]) throw new CompanyError("That record is not in this company. Nothing was posted.");
+  } else {
+    const invoice = await sql<{ id: string }>`select id from invoices
+      where id = ${input.sourceId} and organization_id = ${input.orgId} limit 1`;
+    if (!invoice[0]) throw new CompanyError("That record is not in this company. Nothing was posted.");
+  }
   const inserted = await sql<{ id: string }>`insert into journal_entries (id, organization_id, source_type, source_id, created_by)
     values (${nid("jrn")}, ${input.orgId}, ${input.sourceType}, ${input.sourceId}, ${input.actorId})
     on conflict (organization_id, source_type, source_id) do nothing
     returning id`;
-  if (!inserted[0]) return;
-  for (const line of lines) {
-    await sql`insert into journal_lines (id, organization_id, entry_id, account_id, debit_cents, credit_cents)
-      values (${nid("jln")}, ${input.orgId}, ${inserted[0].id}, ${`${input.orgId}:${line.code}`}, ${line.debitCents}, ${line.creditCents})`;
+  if (!inserted[0]) {
+    const existing = await sql<{ id: string }>`select id from journal_entries
+      where organization_id = ${input.orgId} and source_type = ${input.sourceType} and source_id = ${input.sourceId} limit 1`;
+    if (!existing[0]) throw new CompanyError("That journal entry could not be posted.");
+    const stored = await sql<{ code: string; debit_cents: unknown; credit_cents: unknown }>`select a.code, l.debit_cents, l.credit_cents
+      from journal_lines l
+      join ledger_accounts a on a.id = l.account_id and a.organization_id = l.organization_id
+      where l.organization_id = ${input.orgId} and l.entry_id = ${existing[0].id}`;
+    const signature = (rows: JournalLine[]) => rows.map((line) => `${line.code}:${line.debitCents}:${line.creditCents}`).sort().join("|");
+    const previous = signature(stored.map((row) => ({ code: row.code, debitCents: num(row.debit_cents), creditCents: num(row.credit_cents) })));
+    if (previous !== signature(lines)) throw new CompanyError("That record was already posted. A different amount cannot replace it.");
+    return;
   }
+  const entryId = inserted[0].id;
+  const lineId = [nid("jln"), nid("jln"), nid("jln")];
+  if (lines.length === 2) {
+    await sql`insert into journal_lines (id, organization_id, entry_id, account_id, debit_cents, credit_cents)
+      values
+        (${lineId[0]}, ${input.orgId}, ${entryId}, ${`${input.orgId}:${lines[0].code}`}, ${lines[0].debitCents}, ${lines[0].creditCents}),
+        (${lineId[1]}, ${input.orgId}, ${entryId}, ${`${input.orgId}:${lines[1].code}`}, ${lines[1].debitCents}, ${lines[1].creditCents})`;
+    return;
+  }
+  await sql`insert into journal_lines (id, organization_id, entry_id, account_id, debit_cents, credit_cents)
+    values
+      (${lineId[0]}, ${input.orgId}, ${entryId}, ${`${input.orgId}:${lines[0].code}`}, ${lines[0].debitCents}, ${lines[0].creditCents}),
+      (${lineId[1]}, ${input.orgId}, ${entryId}, ${`${input.orgId}:${lines[1].code}`}, ${lines[1].debitCents}, ${lines[1].creditCents}),
+      (${lineId[2]}, ${input.orgId}, ${entryId}, ${`${input.orgId}:${lines[2].code}`}, ${lines[2].debitCents}, ${lines[2].creditCents})`;
 }
 
 async function nextInvoiceNumber(sql: Sql, orgId: string): Promise<string> {
