@@ -616,7 +616,7 @@ export async function allocatePayment(sql: Sql, input: {
         : "A payable takes an expenditure. A receipt does not pay it.");
     }
     const usedInvoice = await tx<{ total: unknown }>`select coalesce(sum(amount_cents), 0)::int as total from invoice_allocations
-      where invoice_id = ${invoice[0].id}`;
+      where invoice_id = ${invoice[0].id} and organization_id = ${input.orgId}`;
     const usedPayment = await tx<{ total: unknown }>`select coalesce(sum(a.amount_cents), 0)::int as total
       from invoice_allocations a
       join invoices i on i.id = a.invoice_id and i.organization_id = a.organization_id
@@ -662,37 +662,43 @@ export async function addQuoteLine(sql: Sql, input: {
 }): Promise<void> {
   refuseAgent(input.actorId, "add a quote line");
   const quantity = quantityOf(input.quantity);
-  const quote = await sql<{ id: string; status: string }>`select id, status from quotes
-    where id = ${input.quoteId} and organization_id = ${input.orgId} limit 1`;
-  if (!quote[0]) throw new CompanyError("That quote is not in this company.");
-  if (quote[0].status !== "draft") throw new CompanyError("An issued quote does not take new lines.");
-  const offer = await sql<{ id: string; name: string; price_cents: unknown; status: string }>`select id, name, price_cents, status from offers
-    where id = ${input.offerId} and organization_id = ${input.orgId} limit 1`;
-  if (!offer[0] || offer[0].status !== "active") throw new CompanyError("A retired offer cannot be added. Choose an active offer in this company.");
-  const unit = input.amount.trim() ? dollarsToCents(input.amount) : num(offer[0].price_cents);
-  if (unit == null || unit < 1) throw new CompanyError("Enter a price like 25 or 25.00.");
-  const total = unit * quantity;
-  if (total > 100_000_000) throw new CompanyError("That line is too large.");
-  await sql`insert into quote_lines (id, organization_id, quote_id, offer_id, quantity, amount_cents, description)
-    values (${nid("qln")}, ${input.orgId}, ${quote[0].id}, ${offer[0].id}, ${quantity}, ${total}, ${offer[0].name})`;
+  if (!sql.transaction) throw new CompanyError("The books lock is unavailable. No line was added.");
+  await sql.transaction(async (tx) => {
+    const quote = await tx<{ id: string; status: string }>`select id, status from quotes
+      where id = ${input.quoteId} and organization_id = ${input.orgId} for update`;
+    if (!quote[0]) throw new CompanyError("That quote is not in this company.");
+    if (quote[0].status !== "draft") throw new CompanyError("An issued quote does not take new lines.");
+    const offer = await tx<{ id: string; name: string; price_cents: unknown; status: string }>`select id, name, price_cents, status from offers
+      where id = ${input.offerId} and organization_id = ${input.orgId} limit 1`;
+    if (!offer[0] || offer[0].status !== "active") throw new CompanyError("A retired offer cannot be added. Choose an active offer in this company.");
+    const unit = input.amount.trim() ? dollarsToCents(input.amount) : num(offer[0].price_cents);
+    if (unit == null || unit < 1) throw new CompanyError("Enter a price like 25 or 25.00.");
+    const total = unit * quantity;
+    if (total > 100_000_000) throw new CompanyError("That line is too large.");
+    await tx`insert into quote_lines (id, organization_id, quote_id, offer_id, quantity, amount_cents, description)
+      values (${nid("qln")}, ${input.orgId}, ${quote[0].id}, ${offer[0].id}, ${quantity}, ${total}, ${offer[0].name})`;
+  });
 }
 
 export async function issueQuote(sql: Sql, input: { orgId: string; actorId: string; quoteId: string }): Promise<void> {
   refuseAgent(input.actorId, "issue a quote");
-  const quote = await sql<{ id: string; status: string }>`select id, status from quotes
-    where id = ${input.quoteId} and organization_id = ${input.orgId} limit 1`;
-  if (!quote[0] || quote[0].status !== "draft") throw new CompanyError("That draft quote is not in this company.");
-  const lines = await sql<{ offer_id: string }>`select offer_id from quote_lines
-    where quote_id = ${quote[0].id} and organization_id = ${input.orgId}`;
-  if (lines.length === 0) throw new CompanyError("Add a line before issuing the quote.");
-  const retired = await sql<{ id: string }>`select o.id from offers o
-    join quote_lines l on l.offer_id = o.id and l.organization_id = o.organization_id
-    where l.quote_id = ${quote[0].id} and l.organization_id = ${input.orgId} and o.status <> ${"active"} limit 1`;
-  if (retired[0]) throw new CompanyError("A retired offer is on this quote. Remove it before issuing.");
-  const rows = await sql<{ id: string }>`update quotes set status = ${"issued"}
-    where id = ${quote[0].id} and organization_id = ${input.orgId} and status = ${"draft"} returning id`;
-  if (!rows[0]) throw new CompanyError("That draft quote is not in this company.");
-  await audit(sql, input.orgId, input.actorId, "quote.issued", rows[0].id, "Issued. This is not an order and not a payment.");
+  if (!sql.transaction) throw new CompanyError("The books lock is unavailable. The quote was not issued.");
+  await sql.transaction(async (tx) => {
+    const quote = await tx<{ id: string; status: string }>`select id, status from quotes
+      where id = ${input.quoteId} and organization_id = ${input.orgId} for update`;
+    if (!quote[0] || quote[0].status !== "draft") throw new CompanyError("That draft quote is not in this company.");
+    const lines = await tx<{ offer_id: string }>`select offer_id from quote_lines
+      where quote_id = ${quote[0].id} and organization_id = ${input.orgId}`;
+    if (lines.length === 0) throw new CompanyError("Add a line before issuing the quote.");
+    const retired = await tx<{ id: string }>`select o.id from offers o
+      join quote_lines l on l.offer_id = o.id and l.organization_id = o.organization_id
+      where l.quote_id = ${quote[0].id} and l.organization_id = ${input.orgId} and o.status <> ${"active"} limit 1`;
+    if (retired[0]) throw new CompanyError("A retired offer is on this quote. Remove it before issuing.");
+    const rows = await tx<{ id: string }>`update quotes set status = ${"issued"}
+      where id = ${quote[0].id} and organization_id = ${input.orgId} and status = ${"draft"} returning id`;
+    if (!rows[0]) throw new CompanyError("That draft quote is not in this company.");
+    await audit(tx, input.orgId, input.actorId, "quote.issued", rows[0].id, "Issued. This is not an order and not a payment.");
+  });
 }
 
 export async function acceptQuote(sql: Sql, input: { orgId: string; actorId: string; quoteId: string }): Promise<string> {

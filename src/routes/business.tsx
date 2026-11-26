@@ -504,6 +504,8 @@ function SalesTab({ data, reload, onError }: { data: BusinessView; reload: () =>
                   <Quiet onError={onError} onDone={reload} label="Add selected offer" run={() => businessCommand({ data: { type: "quote-line", recordId: quote.id, offerId, quantity, amount: price } })} />
                   <Quiet onError={onError} onDone={reload} label="Issue quote" run={() => businessCommand({ data: { type: "issue-quote", recordId: quote.id } })} />
                 </div>
+              ) : data.orders.some((order) => order.quoteId === quote.id) ? (
+                <p className="mt-2 text-xs text-muted">This quote is already an order. Accepting it again would not create a second one.</p>
               ) : (
                 <div className="mt-2"><Quiet onError={onError} onDone={reload} label="Accept into an order" run={() => businessCommand({ data: { type: "accept-quote", recordId: quote.id } })} /></div>
               )}
