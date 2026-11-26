@@ -416,7 +416,7 @@ function FinanceTab({ data, reload, onError }: { data: BusinessView; reload: () 
               <li key={item.id} className="py-3 text-sm">
                 <p>{item.number ? `${item.number} · ` : ""}{item.title} · {item.partyName} · {item.status}</p>
                 <p className="font-mono text-xs text-muted tabular-nums">{formatMoney(item.allocatedCents)} of {formatMoney(item.amountCents)}</p>
-                {item.status === "issued" && !item.posted ? <p className="text-xs text-muted">Not posted. This claim is unavailable, not zero.</p> : null}
+                {item.number && !item.posted ? <p className="text-xs text-muted">Not posted. This claim is unavailable, not zero.</p> : null}
                 {item.status === "draft" || item.status === "issued" ? (
                   <div className="mt-2 flex flex-wrap gap-2">
                     {item.status === "draft" ? <Quiet onError={onError} onDone={reload} label="Issue" run={() => businessCommand({ data: { type: "issue-invoice", recordId: item.id } })} /> : null}

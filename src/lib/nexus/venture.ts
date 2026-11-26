@@ -1109,7 +1109,7 @@ export async function loadBusiness(sql: Sql, orgId: string): Promise<BusinessVie
     join journal_lines l on l.entry_id = e.id and l.organization_id = e.organization_id
     join ledger_accounts a on a.id = l.account_id and a.organization_id = e.organization_id
     where e.organization_id = ${orgId}
-    order by e.posted_at, a.code`;
+    order by e.posted_at, e.id, a.code`;
   const journal: BusinessView["journal"] = [];
   for (const row of journalRows) {
     const line = { code: row.code, name: row.name, debitCents: num(row.debit_cents), creditCents: num(row.credit_cents) };

@@ -104,6 +104,32 @@ create trigger journal_lines_must_balance
   for each statement
   execute function journal_entry_must_balance();
 
+-- A posted entry is closed once its lines exist. A later insert must not add to it.
+create or replace function journal_lines_no_append()
+returns trigger
+language plpgsql
+as $$
+declare
+  bad integer;
+begin
+  select count(*) into bad
+  from journal_lines existing
+  where existing.entry_id in (select entry_id from new_lines)
+    and existing.id not in (select id from new_lines);
+  if bad > 0 then
+    raise exception 'Posted journal rows cannot be changed or deleted';
+  end if;
+  return null;
+end;
+$$;
+
+drop trigger if exists journal_lines_no_append on journal_lines;
+create trigger journal_lines_no_append
+  after insert on journal_lines
+  referencing new table as new_lines
+  for each statement
+  execute function journal_lines_no_append();
+
 create or replace function journal_rows_immutable()
 returns trigger
 language plpgsql

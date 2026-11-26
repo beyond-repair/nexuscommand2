@@ -483,11 +483,45 @@ test("invoice numbers, voids, and journal entries stay on the claim", async () =
   assert.deepEqual(parallelNumbers, ["INV-0004", "INV-0005"]);
 
   await db.query(
-    "insert into invoices (id, organization_id, direction, party_id, title, amount_cents, status, created_by) values ($1, $2, 'receivable', $3, 'Unposted', 300, 'issued', $4)",
+    "insert into invoices (id, organization_id, direction, party_id, title, amount_cents, status, created_by, number) values ($1, $2, 'receivable', $3, 'Unposted', 300, 'issued', $4, 'INV-0099')",
     ["inv_gap", orgId, customer, owner],
   );
   assert.equal((await loadBusiness(sql, orgId)).statement.journalClaimsCents, null);
   assert.equal((await loadBusiness(sql, orgId)).invoices.find((item) => item.id === "inv_gap")?.posted, false);
+  await voidInvoice(sql, { orgId, actorId: owner, invoiceId: "inv_gap" });
+  const gap = (await loadBusiness(sql, orgId)).invoices.find((item) => item.id === "inv_gap");
+  assert.equal(gap?.status, "void");
+  assert.equal(gap?.posted, false);
+  assert.equal((await loadBusiness(sql, orgId)).statement.journalClaimsCents, null);
+
+  await sql.transaction!(async (tx) => {
+    await tx`insert into journal_entries (id, organization_id, source_type, source_id, created_by, posted_at)
+      values
+        (${"jrn_tie_a"}, ${orgId}, ${"invoice.void"}, ${"tie-a"}, ${owner}, ${"2026-01-01T00:00:00Z"}),
+        (${"jrn_tie_b"}, ${orgId}, ${"invoice.void"}, ${"tie-b"}, ${owner}, ${"2026-01-01T00:00:00Z"})`;
+    await tx`insert into journal_lines (id, organization_id, entry_id, account_id, debit_cents, credit_cents)
+      values
+        (${"jln_tie_a1"}, ${orgId}, ${"jrn_tie_a"}, ${`${orgId}:4100`}, ${300}, ${0}),
+        (${"jln_tie_a2"}, ${orgId}, ${"jrn_tie_a"}, ${`${orgId}:1200`}, ${0}, ${300}),
+        (${"jln_tie_b1"}, ${orgId}, ${"jrn_tie_b"}, ${`${orgId}:1200`}, ${400}, ${0}),
+        (${"jln_tie_b2"}, ${orgId}, ${"jrn_tie_b"}, ${`${orgId}:4100`}, ${0}, ${400})`;
+  });
+  const tied = await loadBusiness(sql, orgId);
+  assert.ok(tied.journal.length >= 2);
+  for (const entry of tied.journal) {
+    const debit = entry.lines.reduce((sum, line) => sum + line.debitCents, 0);
+    const credit = entry.lines.reduce((sum, line) => sum + line.creditCents, 0);
+    assert.equal(debit, credit, entry.id);
+    assert.ok(entry.lines.length >= 2, entry.id);
+  }
+  const posted = tied.journal.find((entry) => entry.lines.length >= 2);
+  assert.ok(posted);
+  await assert.rejects(sql.transaction!(async (tx) => {
+    await tx`insert into journal_lines (id, organization_id, entry_id, account_id, debit_cents, credit_cents)
+      values
+        (${"jln_extra_a"}, ${orgId}, ${posted.id}, ${`${orgId}:1200`}, ${50}, ${0}),
+        (${"jln_extra_b"}, ${orgId}, ${posted.id}, ${`${orgId}:4100`}, ${0}, ${50})`;
+  }), /cannot be changed/);
 
   const other = (await commandCenter(sql, "user_other_journal")).organization.id;
   assert.equal((await loadBusiness(sql, other)).journal.length, 0);
